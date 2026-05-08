@@ -514,6 +514,13 @@ export const UploadMyDocumentBody = zod.object({
 });
 
 /**
+ * @summary Download the binary contents of a document
+ */
+export const DownloadDocumentParams = zod.object({
+  documentId: zod.coerce.string(),
+});
+
+/**
  * @summary Delete a document from the prospect's own dossier
  */
 export const DeleteMyDocumentParams = zod.object({

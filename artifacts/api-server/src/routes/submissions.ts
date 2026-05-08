@@ -16,6 +16,7 @@ import { requireAuth } from "../lib/auth";
 import { logActivity } from "../lib/activity";
 import { serializeSubmission } from "../lib/serializers";
 import { sendEmail } from "../lib/integrations";
+import { officerCanAccessDossier } from "../lib/dossier-access";
 
 const router: IRouter = Router();
 
@@ -23,6 +24,10 @@ router.get("/dossiers/:dossierId/submissions", requireAuth(["loan_officer", "adm
   const params = ListDossierSubmissionsParams.safeParse(req.params);
   if (!params.success) {
     res.status(400).json({ error: params.error.message });
+    return;
+  }
+  if (!(await officerCanAccessDossier(params.data.dossierId))) {
+    res.status(404).json({ error: "Dossier niet gevonden" });
     return;
   }
   const rows = await db
@@ -57,6 +62,21 @@ router.post("/dossiers/:dossierId/submissions", requireAuth(["loan_officer", "ad
     .limit(1);
   if (!row) {
     res.status(404).json({ error: "Dossier niet gevonden" });
+    return;
+  }
+  // Gate: only dossiers explicitly approved by a loan officer may be sent
+  // to partner financiers.
+  const approvedStatuses = [
+    "approved_for_partner_submission",
+    "memorandum_generated",
+    "submitted_to_partners",
+  ];
+  if (!approvedStatuses.includes(row.dossiers.status)) {
+    res.status(409).json({
+      error:
+        "Dit dossier is nog niet goedgekeurd voor partneraanbod door de kredietacceptant.",
+      status: row.dossiers.status,
+    });
     return;
   }
   const partners = await db

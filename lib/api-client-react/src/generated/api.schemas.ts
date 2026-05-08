@@ -403,6 +403,10 @@ export const ListDossiersBucket = {
   rejected: "rejected",
 } as const;
 
+export type DownloadDocument404 = {
+  error?: string;
+};
+
 export type ListRecentActivityParams = {
   limit?: number;
 };

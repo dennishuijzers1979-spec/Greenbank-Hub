@@ -6,7 +6,15 @@ import {
   prospectProfilesTable,
   documentsTable,
   conditionsTable,
+  usersTable,
 } from "@workspace/db";
+import { inArray } from "drizzle-orm";
+import { GATE_THRESHOLDS } from "../lib/skill-orchestration";
+import {
+  OFFICER_VISIBLE_STATUSES,
+  isOfficerVisibleStatus,
+  officerCanAccessDossier,
+} from "../lib/dossier-access";
 import {
   UpdateMyIntakeBody,
   ListDossiersQueryParams,
@@ -132,6 +140,23 @@ router.post("/dossiers/me/submit", requireAuth(["prospect"]), async (req, res): 
     res.status(404).json({ error: "Geen dossier gevonden" });
     return;
   }
+  // Gate: AI pre-validation must have produced thresholds before submission
+  const completeness = dossier.completenessScore ?? 0;
+  const correctness = dossier.correctnessScore ?? 0;
+  const viability = dossier.viabilityScore ?? 0;
+  if (
+    completeness < GATE_THRESHOLDS.completeness ||
+    correctness < GATE_THRESHOLDS.correctness ||
+    viability < GATE_THRESHOLDS.viability
+  ) {
+    res.status(409).json({
+      error:
+        "Dossier voldoet nog niet aan de minimale drempels — voer pre-validatie uit en vul ontbrekende informatie aan.",
+      thresholds: GATE_THRESHOLDS,
+      scores: { completeness, correctness, viability },
+    });
+    return;
+  }
   const [updated] = await db
     .update(dossiersTable)
     .set({
@@ -161,10 +186,13 @@ router.get("/dossiers", requireAuth(["loan_officer", "admin"]), async (req, res)
     res.status(400).json({ error: params.error.message });
     return;
   }
+  // Loan officers only see dossiers that have passed the prospect-side gates
+  // and entered the Geenbank workflow.
   const rows = await db
     .select()
     .from(dossiersTable)
     .innerJoin(prospectProfilesTable, eq(prospectProfilesTable.id, dossiersTable.prospectId))
+    .where(inArray(dossiersTable.status, [...OFFICER_VISIBLE_STATUSES]))
     .orderBy(desc(dossiersTable.updatedAt));
   const items = rows.map((r) => serializeDossierListItem(r.dossiers, r.prospect_profiles));
   const bucket = params.data.bucket;
@@ -185,7 +213,7 @@ router.get("/dossiers/:dossierId", requireAuth(["loan_officer", "admin"]), async
     .innerJoin(prospectProfilesTable, eq(prospectProfilesTable.id, dossiersTable.prospectId))
     .where(eq(dossiersTable.id, params.data.dossierId))
     .limit(1);
-  if (!row) {
+  if (!row || !isOfficerVisibleStatus(row.dossiers.status)) {
     res.status(404).json({ error: "Dossier niet gevonden" });
     return;
   }
@@ -197,6 +225,10 @@ router.post("/dossiers/:dossierId/decision", requireAuth(["loan_officer", "admin
   const params = MakeDossierDecisionParams.safeParse(req.params);
   if (!params.success) {
     res.status(400).json({ error: params.error.message });
+    return;
+  }
+  if (!(await officerCanAccessDossier(params.data.dossierId))) {
+    res.status(404).json({ error: "Dossier niet gevonden" });
     return;
   }
   const body = MakeDossierDecisionBody.safeParse(req.body);
@@ -255,11 +287,21 @@ router.post("/dossiers/:dossierId/decision", requireAuth(["loan_officer", "admin
     action: `decision_${body.data.decision}`,
     description: `Kredietacceptant heeft het dossier ${actionLabel}.`,
   });
-  await sendEmail({
-    to: req.user!.email,
-    subject: `Dossier ${prospect.companyName} ${actionLabel}`,
-    body: body.data.notes ?? actionLabel,
-  });
+  // Notify the prospect — not the loan officer — about the decision.
+  const [prospectUser] = await db
+    .select()
+    .from(usersTable)
+    .where(eq(usersTable.id, prospect.userId))
+    .limit(1);
+  if (prospectUser) {
+    await sendEmail({
+      to: prospectUser.email,
+      subject: `Je financieringsdossier is ${actionLabel}`,
+      body:
+        body.data.notes ??
+        `De kredietacceptant heeft je dossier ${actionLabel}. Log in op Geenbank Hub voor de details.`,
+    });
+  }
   const c = await counts(dossier.id);
   res.json(serializeDossier(updated, prospect, c.documentsCount, c.blockingConditionsCount));
 });

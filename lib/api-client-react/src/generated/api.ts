@@ -29,6 +29,7 @@ import type {
   DocumentUpload,
   Dossier,
   DossierListItem,
+  DownloadDocument404,
   EntrepreneurReport,
   FinancierReport,
   HealthStatus,
@@ -1123,6 +1124,95 @@ export const useUploadMyDocument = <
 > => {
   return useMutation(getUploadMyDocumentMutationOptions(options));
 };
+
+/**
+ * @summary Download the binary contents of a document
+ */
+export const getDownloadDocumentUrl = (documentId: string) => {
+  return `/api/documents/${documentId}/content`;
+};
+
+export const downloadDocument = async (
+  documentId: string,
+  options?: RequestInit,
+): Promise<Blob> => {
+  return customFetch<Blob>(getDownloadDocumentUrl(documentId), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getDownloadDocumentQueryKey = (documentId: string) => {
+  return [`/api/documents/${documentId}/content`] as const;
+};
+
+export const getDownloadDocumentQueryOptions = <
+  TData = Awaited<ReturnType<typeof downloadDocument>>,
+  TError = ErrorType<DownloadDocument404>,
+>(
+  documentId: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof downloadDocument>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getDownloadDocumentQueryKey(documentId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof downloadDocument>>
+  > = ({ signal }) =>
+    downloadDocument(documentId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!documentId,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof downloadDocument>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type DownloadDocumentQueryResult = NonNullable<
+  Awaited<ReturnType<typeof downloadDocument>>
+>;
+export type DownloadDocumentQueryError = ErrorType<DownloadDocument404>;
+
+/**
+ * @summary Download the binary contents of a document
+ */
+
+export function useDownloadDocument<
+  TData = Awaited<ReturnType<typeof downloadDocument>>,
+  TError = ErrorType<DownloadDocument404>,
+>(
+  documentId: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof downloadDocument>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getDownloadDocumentQueryOptions(documentId, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
 
 /**
  * @summary Delete a document from the prospect's own dossier

@@ -24,6 +24,7 @@ export * from "./documentUpload";
 export * from "./dossier";
 export * from "./dossierListItem";
 export * from "./dossierStatus";
+export * from "./downloadDocument404";
 export * from "./entrepreneurReport";
 export * from "./financierReport";
 export * from "./healthStatus";

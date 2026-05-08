@@ -220,6 +220,28 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Document" }
 
+  /documents/{documentId}/content:
+    get:
+      operationId: downloadDocument
+      tags: [documents]
+      summary: Download the binary contents of a document
+      parameters:
+        - in: path
+          name: documentId
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Binary contents
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema: { type: object, properties: { error: { type: string } } }
+
   /dossiers/me/documents/{documentId}:
     delete:
       operationId: deleteMyDocument

@@ -9,6 +9,7 @@ import {
 import { ListConditionsParams } from "@workspace/api-zod";
 import { requireAuth } from "../lib/auth";
 import { serializeCondition } from "../lib/serializers";
+import { officerCanAccessDossier } from "../lib/dossier-access";
 
 const router: IRouter = Router();
 
@@ -43,6 +44,10 @@ router.get("/dossiers/:dossierId/conditions", requireAuth(["loan_officer", "admi
   const params = ListConditionsParams.safeParse(req.params);
   if (!params.success) {
     res.status(400).json({ error: params.error.message });
+    return;
+  }
+  if (!(await officerCanAccessDossier(params.data.dossierId))) {
+    res.status(404).json({ error: "Dossier niet gevonden" });
     return;
   }
   const items = await db

@@ -313,11 +313,8 @@ export async function seedIfEmpty(): Promise<void> {
     await db.insert(activityLogsTable).values(a);
   }
 
-  // Make sure ports user can log in immediately
-  void officer;
-  void admin;
-  await db
-    .update(usersTable)
-    .set({ firstLoginCompleted: true })
-    .where(eq(usersTable.id, prospect1.id));
+  logger.info(
+    { admin: admin.email, officer: officer.email },
+    "Demo seed completed",
+  );
 }
