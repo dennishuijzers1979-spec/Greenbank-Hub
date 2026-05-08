@@ -44,6 +44,7 @@ export type RunAnalysisGateResult =
       actions: string[];
       missingDocuments: string[];
       invalidDocuments: string[];
+      pendingDocuments: string[];
       blockingConditions: number;
       scores: {
         completeness: number;
@@ -69,9 +70,12 @@ export async function checkRunAnalysisGate(
 
   const presentTypes = new Set(
     documents
-      .filter((d) => d.validationStatus !== "invalid")
+      .filter((d) => d.validationStatus === "valid")
       .map((d) => d.documentType),
   );
+  const pendingDocuments = documents
+    .filter((d) => d.validationStatus === "pending")
+    .map((d) => d.filename);
   const missingDocuments = REQUIRED_DOCUMENT_TYPES.filter(
     (t) => !presentTypes.has(t),
   );
@@ -128,6 +132,12 @@ export async function checkRunAnalysisGate(
     );
     actions.push("Vervang ongeldige documenten door correcte versies.");
   }
+  if (pendingDocuments.length > 0) {
+    reasons.push(
+      `Een of meer documenten staan nog op 'in behandeling': ${pendingDocuments.join(", ")}.`,
+    );
+    actions.push("Wacht tot validatie klaar is of upload het document opnieuw.");
+  }
   if (blockingConditions.length > 0) {
     reasons.push(
       `Er staan ${blockingConditions.length} blokkerende voorwaarde(n) open.`,
@@ -156,6 +166,14 @@ export async function checkRunAnalysisGate(
       "Voer eerst opnieuw de pre-validatie uit nadat je het dossier hebt aangevuld.",
     );
   }
+  if (latest && viability < GATE_THRESHOLDS.viability) {
+    reasons.push(
+      `Levensvatbaarheidsscore (${viability}) ligt onder de drempel van ${GATE_THRESHOLDS.viability}.`,
+    );
+    actions.push(
+      "Verbeter de financiële kerncijfers of vraag een passender bedrag.",
+    );
+  }
 
   if (reasons.length === 0) return { ok: true };
   return {
@@ -164,6 +182,7 @@ export async function checkRunAnalysisGate(
     actions,
     missingDocuments: [...missingDocuments],
     invalidDocuments,
+    pendingDocuments,
     blockingConditions: blockingConditions.length,
     scores: { completeness, correctness, confidence, viability },
     thresholds: GATE_THRESHOLDS,

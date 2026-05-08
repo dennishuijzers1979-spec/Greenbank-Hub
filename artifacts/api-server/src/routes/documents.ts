@@ -162,7 +162,7 @@ router.post(
         sizeBytes: stored.sizeBytes,
         storagePath: stored.storagePath,
         uploadStatus: "uploaded",
-        validationStatus: "pending",
+        validationStatus: "valid",
         extractedDataStatus: "pending",
         usedInAnalysis: false,
       })

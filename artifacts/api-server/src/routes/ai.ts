@@ -96,6 +96,7 @@ router.post(
         actions: gate.actions,
         missingDocuments: gate.missingDocuments,
         invalidDocuments: gate.invalidDocuments,
+        pendingDocuments: gate.pendingDocuments,
         blockingConditions: gate.blockingConditions,
         scores: gate.scores,
         thresholds: gate.thresholds,

@@ -1,0 +1,99 @@
+Continue working on the existing Geenbank Hub codebase.
+
+Do not rewrite the app. Inspect the current structure first and preserve the existing improvements:
+- loan officer dashboard filtering
+- officerCanAccessDossier
+- document download endpoint
+- separate skill adapter modules
+- prospect AI buttons
+- existing Dutch UI and role-based access control
+
+Fix the remaining Codex review points for Geenbank Hub.
+
+1. Upload limit
+
+The frontend and backend accept 20 MB files, but uploads are sent as base64 JSON. A 20 MB file becomes larger than 20 MB in the request body.
+
+Fix this by:
+- increasing the Express JSON/urlencoded request body limit to at least 32mb
+- keeping the actual MAX_BYTES file limit at 20 MB
+- adding or preserving a clear error message when the request body is too large
+
+Preferred first-build fix:
+- app.use(express.json({ limit: "32mb" }))
+- app.use(express.urlencoded({ extended: true, limit: "32mb" }))
+- keep MAX_BYTES = 20 * 1024 * 1024
+
+2. Document validation status
+
+New uploads must not count as usable for AI gating while validationStatus is "pending".
+
+Choose one consistent approach:
+
+Option A, preferred for this first build:
+- after successful server-side validation of file type, file size, file signature, and storage, store the document with validationStatus = "valid"
+- keep extractedDataStatus = "pending" if real extraction is not implemented yet
+
+Or option B:
+- keep uploads as pending
+- but update all gating/scoring logic so only validationStatus = "valid" counts for required documents
+
+Whichever option you choose, make the UI status match the backend behavior.
+
+Specifically check and update:
+- checkRunAnalysisGate
+- FinancingNeedAssessorAdapter
+- any logic that counts required documents as present
+- prospect document status display if needed
+
+3. Submission gate
+
+The /dossiers/me/submit endpoint must block submission when any of these are true:
+- open blocking conditions exist
+- confidenceScore is below GATE_THRESHOLDS.confidence
+- required valid documents are missing
+- required documents are invalid or still pending
+- completenessScore is below threshold
+- correctnessScore is below threshold
+- viabilityScore is below threshold
+
+Reuse checkRunAnalysisGate where practical, or create one central reusable gate so business rules do not drift between:
+- full AI analysis
+- submit-to-Geenbank
+- loan officer eligibility
+
+Do not scatter these rules inside frontend components.
+
+4. Manual behavior that must be true after the fix
+
+- A prospect with missing documents cannot start full AI analysis.
+- A prospect with pending or invalid required documents cannot submit.
+- A prospect with valid required demo documents can run pre-validation, run full AI analysis, and submit.
+- A loan officer only sees submitted or eligible dossiers.
+- Document download works only for allowed roles.
+- No primary button should be a dead placeholder.
+
+5. Run checks
+
+After implementation, run:
+
+pnpm run typecheck
+pnpm run build
+
+If either command fails, fix the issue and rerun. Do not report completion until both pass, unless there is a true external blocker. If blocked, report the exact command and exact error.
+
+6. Commit and push
+
+Commit and push with this exact commit message:
+
+Geenbank Hub: tighten document gating and submission checks
+
+7. Report back exactly
+
+After pushing, report:
+- changed files
+- typecheck output
+- build output
+- manually tested flows
+- which integrations still run in mock mode
+- any known limitations or remaining risks

@@ -115,7 +115,7 @@ export default function DocumentenUpload() {
   const requiredTypes = DOCUMENT_TYPE_OPTIONS.filter(o => o.required);
   const presentTypes = new Set(
     (documents ?? [])
-      .filter(d => d.validationStatus !== 'invalid')
+      .filter(d => d.validationStatus === 'valid')
       .map(d => d.documentType)
   );
   const missingRequired = requiredTypes.filter(t => !presentTypes.has(t.value));

@@ -34,7 +34,7 @@ export const FinancingNeedAssessorAdapter = {
     try {
       const present = new Set(
         ctx.documents
-          .filter((d) => d.validationStatus !== "invalid")
+          .filter((d) => d.validationStatus === "valid")
           .map((d) => d.documentType),
       );
       const completedDocs = REQUIRED_DOCUMENT_TYPES.filter((t) =>
