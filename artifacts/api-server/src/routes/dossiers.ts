@@ -9,7 +9,7 @@ import {
   usersTable,
 } from "@workspace/db";
 import { inArray } from "drizzle-orm";
-import { GATE_THRESHOLDS } from "../lib/skill-orchestration";
+import { checkRunAnalysisGate } from "../lib/skill-orchestration";
 import {
   OFFICER_VISIBLE_STATUSES,
   isOfficerVisibleStatus,
@@ -140,20 +140,21 @@ router.post("/dossiers/me/submit", requireAuth(["prospect"]), async (req, res): 
     res.status(404).json({ error: "Geen dossier gevonden" });
     return;
   }
-  // Gate: AI pre-validation must have produced thresholds before submission
-  const completeness = dossier.completenessScore ?? 0;
-  const correctness = dossier.correctnessScore ?? 0;
-  const viability = dossier.viabilityScore ?? 0;
-  if (
-    completeness < GATE_THRESHOLDS.completeness ||
-    correctness < GATE_THRESHOLDS.correctness ||
-    viability < GATE_THRESHOLDS.viability
-  ) {
+  // Single source of truth — same gate as full AI analysis.
+  const gate = await checkRunAnalysisGate(dossier.id);
+  if (!gate.ok) {
     res.status(409).json({
-      error:
-        "Dossier voldoet nog niet aan de minimale drempels — voer pre-validatie uit en vul ontbrekende informatie aan.",
-      thresholds: GATE_THRESHOLDS,
-      scores: { completeness, correctness, viability },
+      error: "Dossier kan nog niet ingediend worden",
+      message:
+        "Je dossier voldoet nog niet aan de eisen voor indienen bij Geenbank.",
+      reasons: gate.reasons,
+      actions: gate.actions,
+      missingDocuments: gate.missingDocuments,
+      invalidDocuments: gate.invalidDocuments,
+      pendingDocuments: gate.pendingDocuments,
+      blockingConditions: gate.blockingConditions,
+      scores: gate.scores,
+      thresholds: gate.thresholds,
     });
     return;
   }

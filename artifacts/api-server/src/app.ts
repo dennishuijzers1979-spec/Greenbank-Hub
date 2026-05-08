@@ -43,9 +43,23 @@ app.use(
   }),
 );
 app.use(cookieParser());
-app.use(express.json({ limit: "20mb" }));
-app.use(express.urlencoded({ extended: true, limit: "20mb" }));
+app.use(express.json({ limit: "32mb" }));
+app.use(express.urlencoded({ extended: true, limit: "32mb" }));
 
 app.use("/api", router);
+
+import type { ErrorRequestHandler } from "express";
+const bodyTooLargeHandler: ErrorRequestHandler = (err, _req, res, next) => {
+  const e = err as (Error & { type?: string; status?: number }) | undefined;
+  if (e && (e.type === "entity.too.large" || e.status === 413)) {
+    res.status(413).json({
+      error:
+        "Verzoek is te groot. Upload bestanden van maximaal 20 MB per stuk.",
+    });
+    return;
+  }
+  next(err);
+};
+app.use(bodyTooLargeHandler);
 
 export default app;
