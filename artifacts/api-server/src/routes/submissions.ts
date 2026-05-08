@@ -54,6 +54,10 @@ router.post("/dossiers/:dossierId/submissions", requireAuth(["loan_officer", "ad
     res.status(400).json({ error: "Selecteer minimaal één partner" });
     return;
   }
+  if (!(await officerCanAccessDossier(params.data.dossierId))) {
+    res.status(404).json({ error: "Dossier niet gevonden" });
+    return;
+  }
   const [row] = await db
     .select()
     .from(dossiersTable)
@@ -75,7 +79,6 @@ router.post("/dossiers/:dossierId/submissions", requireAuth(["loan_officer", "ad
     res.status(409).json({
       error:
         "Dit dossier is nog niet goedgekeurd voor partneraanbod door de kredietacceptant.",
-      status: row.dossiers.status,
     });
     return;
   }
