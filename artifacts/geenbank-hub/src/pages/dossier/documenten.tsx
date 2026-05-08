@@ -10,9 +10,24 @@ import { useLocation } from "wouter";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { ArrowLeft, FileType, FileUp, Loader2, Trash2, AlertTriangle, CheckCircle } from "lucide-react";
+import { ArrowLeft, FileType, FileUp, Loader2, Trash2, AlertTriangle } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { format } from "date-fns";
+
+const DOCUMENT_TYPE_OPTIONS: { value: string; label: string; required: boolean }[] = [
+  { value: "annual_accounts", label: "Jaarrekening", required: true },
+  { value: "bank_statements", label: "Bankafschriften", required: true },
+  { value: "kvk_extract", label: "KVK-uittreksel", required: true },
+  { value: "id_document", label: "Identiteitsbewijs", required: true },
+  { value: "forecast", label: "Prognose / cashflow", required: false },
+  { value: "business_plan", label: "Ondernemingsplan", required: false },
+  { value: "other", label: "Overig", required: false },
+];
+
+const MAX_BYTES = 20 * 1024 * 1024;
+
+const labelForType = (type: string) =>
+  DOCUMENT_TYPE_OPTIONS.find((o) => o.value === type)?.label ?? type;
 
 export default function DocumentenUpload() {
   const [, setLocation] = useLocation();
@@ -21,8 +36,9 @@ export default function DocumentenUpload() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   
   const [isUploading, setIsUploading] = useState(false);
+  const [selectedType, setSelectedType] = useState<string>("annual_accounts");
 
-  const { data: dossier } = useGetMyDossier({ query: { queryKey: getGetMyDossierQueryKey() } });
+  useGetMyDossier({ query: { queryKey: getGetMyDossierQueryKey() } });
   const { data: documents, isLoading } = useListMyDocuments({ query: { queryKey: getListMyDocumentsQueryKey() } });
   const { data: conditions } = useListMyConditions({ query: { queryKey: getListMyConditionsQueryKey() } });
 
@@ -33,10 +49,10 @@ export default function DocumentenUpload() {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (file.size > 10 * 1024 * 1024) {
+    if (file.size > MAX_BYTES) {
       toast({
         title: "Bestand te groot",
-        description: "Het bestand mag maximaal 10 MB groot zijn.",
+        description: "Het bestand mag maximaal 20 MB groot zijn.",
         variant: "destructive"
       });
       if (fileInputRef.current) fileInputRef.current.value = "";
@@ -44,18 +60,18 @@ export default function DocumentenUpload() {
     }
 
     setIsUploading(true);
-    try {
-      const reader = new FileReader();
-      reader.onloadend = async () => {
+    const reader = new FileReader();
+    reader.onloadend = async () => {
+      try {
         const base64 = reader.result?.toString().split(',')[1];
         if (!base64) throw new Error("Kon bestand niet lezen");
 
         await uploadMutation.mutateAsync({
           data: {
             filename: file.name,
-            mimeType: file.type,
+            mimeType: file.type || "application/octet-stream",
             sizeBytes: file.size,
-            documentType: determineDocType(file.name),
+            documentType: selectedType,
             contentBase64: base64
           }
         });
@@ -63,15 +79,19 @@ export default function DocumentenUpload() {
         queryClient.invalidateQueries({ queryKey: getListMyDocumentsQueryKey() });
         queryClient.invalidateQueries({ queryKey: getGetMyDossierQueryKey() });
         
-        toast({ title: "Bestand geüpload", description: `${file.name} is succesvol geüpload.` });
-      };
-      reader.readAsDataURL(file);
-    } catch (err) {
-      toast({ title: "Upload mislukt", description: "Probeer het opnieuw.", variant: "destructive" });
-    } finally {
-      setIsUploading(false);
-      if (fileInputRef.current) fileInputRef.current.value = "";
-    }
+        toast({ title: "Bestand geüpload", description: `${file.name} is succesvol geüpload als ${labelForType(selectedType)}.` });
+      } catch (err) {
+        const message =
+          err && typeof err === "object" && "data" in err && err.data && typeof (err as { data: unknown }).data === "object"
+            ? ((err as { data: { error?: string } }).data.error ?? "Probeer het opnieuw.")
+            : "Probeer het opnieuw.";
+        toast({ title: "Upload mislukt", description: message, variant: "destructive" });
+      } finally {
+        setIsUploading(false);
+        if (fileInputRef.current) fileInputRef.current.value = "";
+      }
+    };
+    reader.readAsDataURL(file);
   };
 
   const handleDelete = (docId: string) => {
@@ -84,15 +104,6 @@ export default function DocumentenUpload() {
     });
   };
 
-  const determineDocType = (filename: string) => {
-    const lower = filename.toLowerCase();
-    if (lower.includes('jaarrekening') || lower.includes('balans') || lower.includes('winst')) return 'financial_statements';
-    if (lower.includes('bank') || lower.includes('mt940')) return 'bank_statements';
-    if (lower.includes('prognose') || lower.includes('begroting')) return 'forecast';
-    if (lower.includes('plan') || lower.includes('pitch')) return 'business_plan';
-    return 'other';
-  };
-
   const getStatusColor = (status: string) => {
     if (status === 'valid') return 'text-green-600 bg-green-50 dark:bg-green-900/20';
     if (status === 'invalid') return 'text-red-600 bg-red-50 dark:bg-red-900/20';
@@ -100,6 +111,14 @@ export default function DocumentenUpload() {
   };
 
   const blockingConditions = conditions?.filter(c => c.type === 'blocking' && c.status === 'open') || [];
+
+  const requiredTypes = DOCUMENT_TYPE_OPTIONS.filter(o => o.required);
+  const presentTypes = new Set(
+    (documents ?? [])
+      .filter(d => d.validationStatus !== 'invalid')
+      .map(d => d.documentType)
+  );
+  const missingRequired = requiredTypes.filter(t => !presentTypes.has(t.value));
 
   return (
     <div className="p-6 md:p-10 max-w-4xl mx-auto space-y-6">
@@ -109,13 +128,25 @@ export default function DocumentenUpload() {
       
       <div>
         <h1 className="text-3xl font-serif font-bold tracking-tight mb-2">Documenten</h1>
-        <p className="text-muted-foreground">Upload uw jaarcijfers en banktransacties. AI zal deze direct valideren.</p>
+        <p className="text-muted-foreground">Upload uw kerndocumenten. AI valideert deze direct.</p>
       </div>
+
+      {missingRequired.length > 0 && (
+        <Alert>
+          <AlertTriangle className="w-5 h-5" />
+          <AlertTitle>Nog te uploaden</AlertTitle>
+          <AlertDescription>
+            <ul className="list-disc pl-5 mt-2 space-y-1">
+              {missingRequired.map(t => <li key={t.value}>{t.label}</li>)}
+            </ul>
+          </AlertDescription>
+        </Alert>
+      )}
 
       {blockingConditions.length > 0 && (
         <Alert variant="destructive" className="bg-destructive/10 text-destructive border-destructive/20">
           <AlertTriangle className="w-5 h-5" />
-          <AlertTitle>Ontbrekende documenten</AlertTitle>
+          <AlertTitle>Aandachtspunten</AlertTitle>
           <AlertDescription>
             <ul className="list-disc pl-5 mt-2 space-y-1">
               {blockingConditions.map(cond => (
@@ -129,12 +160,33 @@ export default function DocumentenUpload() {
       <Card>
         <CardHeader>
           <CardTitle>Nieuw document uploaden</CardTitle>
-          <CardDescription>Ondersteunde formaten: PDF, Excel, CSV, Word, Afbeeldingen (Max 10MB)</CardDescription>
+          <CardDescription>Ondersteund: PDF, Excel, CSV, Word, PNG, JPG (max 20 MB)</CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-4">
+          <div>
+            <label htmlFor="docType" className="block text-sm font-medium mb-2">
+              Documenttype
+            </label>
+            <select
+              id="docType"
+              value={selectedType}
+              onChange={(e) => setSelectedType(e.target.value)}
+              className="w-full border rounded-md px-3 py-2 bg-background"
+              disabled={isUploading}
+            >
+              {DOCUMENT_TYPE_OPTIONS.map(opt => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}{opt.required ? " (verplicht)" : ""}
+                </option>
+              ))}
+            </select>
+            <p className="text-xs text-muted-foreground mt-1">
+              Kies het type dat past bij dit bestand — wordt gebruikt door de AI-analyse.
+            </p>
+          </div>
           <div 
             className="border-2 border-dashed border-muted-foreground/25 rounded-xl p-10 flex flex-col items-center justify-center bg-muted/10 hover:bg-muted/30 transition-colors cursor-pointer"
-            onClick={() => fileInputRef.current?.click()}
+            onClick={() => !isUploading && fileInputRef.current?.click()}
           >
             {isUploading ? (
               <div className="flex flex-col items-center text-muted-foreground">
@@ -146,8 +198,8 @@ export default function DocumentenUpload() {
                 <div className="w-16 h-16 bg-primary/10 rounded-full flex items-center justify-center text-primary mb-4">
                   <FileUp className="w-8 h-8" />
                 </div>
-                <p className="text-lg font-medium mb-1 text-foreground">Klik om bestanden te selecteren</p>
-                <p className="text-sm">Of sleep ze hierheen</p>
+                <p className="text-lg font-medium mb-1 text-foreground">Klik om bestand te selecteren</p>
+                <p className="text-sm">Type: <strong>{labelForType(selectedType)}</strong></p>
               </div>
             )}
             <input 
@@ -155,7 +207,7 @@ export default function DocumentenUpload() {
               ref={fileInputRef} 
               className="hidden" 
               onChange={handleFileChange}
-              accept=".pdf,.xlsx,.csv,.docx,.doc,.png,.jpg,.jpeg"
+              accept=".pdf,.xlsx,.xls,.csv,.docx,.doc,.png,.jpg,.jpeg"
             />
           </div>
         </CardContent>
@@ -184,7 +236,7 @@ export default function DocumentenUpload() {
                     <div className="flex items-center text-xs text-muted-foreground mt-1 gap-3">
                       <span>{(doc.sizeBytes / 1024 / 1024).toFixed(2)} MB</span>
                       <span>{format(new Date(doc.createdAt), 'dd MMM yyyy HH:mm')}</span>
-                      <span className="capitalize">{doc.documentType.replace('_', ' ')}</span>
+                      <span>{labelForType(doc.documentType)}</span>
                     </div>
                     {doc.validationNotes && doc.validationStatus !== 'valid' && (
                       <p className="text-xs text-destructive mt-1">{doc.validationNotes}</p>

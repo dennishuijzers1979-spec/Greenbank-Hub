@@ -1,12 +1,26 @@
-import { useGetMyDossier, getGetMyDossierQueryKey, useSubmitMyDossier } from "@workspace/api-client-react";
+import {
+  useGetMyDossier, getGetMyDossierQueryKey, useSubmitMyDossier,
+  useRunMyPrevalidation, useRunMyAnalysis,
+  useListMyConditions, getListMyConditionsQueryKey,
+  getGetMyEntrepreneurReportQueryKey,
+  useListMyDocuments, getListMyDocumentsQueryKey,
+} from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { ProgressSteps } from "@/components/ui/progress-steps";
 import { PROSPECT_PIPELINE_STEPS, getCurrentStepIndex, getStatusLabel } from "@/lib/dossier-utils";
 import { Link, useLocation } from "wouter";
-import { AlertCircle, FileText, Upload, BrainCircuit, CheckCircle2, ArrowRight, Loader2 } from "lucide-react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { AlertCircle, FileText, Upload, BrainCircuit, CheckCircle2, ArrowRight, Loader2, PlayCircle, Sparkles } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+
+type AnalysisGateError = {
+  error?: string;
+  message?: string;
+  reasons?: string[];
+  actions?: string[];
+};
 
 export default function DossierHub() {
   const { data: dossier, isLoading, isError } = useGetMyDossier({
@@ -16,9 +30,76 @@ export default function DossierHub() {
   });
   
   const submitMutation = useSubmitMyDossier();
+  const prevalidationMutation = useRunMyPrevalidation();
+  const analysisMutation = useRunMyAnalysis();
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const [, setLocation] = useLocation();
+  const { data: conditions } = useListMyConditions({ query: { queryKey: getListMyConditionsQueryKey() } });
+  const { data: docs } = useListMyDocuments({ query: { queryKey: getListMyDocumentsQueryKey() } });
+
+  const refreshAfterRun = () => {
+    queryClient.invalidateQueries({ queryKey: getGetMyDossierQueryKey() });
+    queryClient.invalidateQueries({ queryKey: getGetMyEntrepreneurReportQueryKey() });
+    queryClient.invalidateQueries({ queryKey: getListMyConditionsQueryKey() });
+  };
+
+  const handleRunPrevalidation = () => {
+    prevalidationMutation.mutate(undefined, {
+      onSuccess: () => {
+        refreshAfterRun();
+        toast({
+          title: "Pre-validatie klaar",
+          description: "We hebben je dossier doorgenomen — bekijk het rapport.",
+        });
+      },
+      onError: () => {
+        toast({
+          title: "Pre-validatie mislukt",
+          description: "Probeer het opnieuw of neem contact op.",
+          variant: "destructive",
+        });
+      },
+    });
+  };
+
+  const handleRunAnalysis = () => {
+    analysisMutation.mutate(undefined, {
+      onSuccess: () => {
+        refreshAfterRun();
+        toast({
+          title: "AI-analyse afgerond",
+          description: "Je rapport is bijgewerkt met de volledige analyse.",
+        });
+      },
+      onError: (err: unknown) => {
+        const data =
+          err && typeof err === "object" && "data" in err
+            ? ((err as { data: AnalysisGateError | null }).data ?? {})
+            : {};
+        const status =
+          err && typeof err === "object" && "status" in err
+            ? (err as { status: number }).status
+            : 0;
+        if (status === 409) {
+          toast({
+            title: data.error ?? "AI-analyse geblokkeerd",
+            description:
+              (data.reasons && data.reasons.join(" ")) ??
+              data.message ??
+              "Vul je dossier eerst aan.",
+            variant: "destructive",
+          });
+        } else {
+          toast({
+            title: "AI-analyse mislukt",
+            description: "Probeer het later opnieuw.",
+            variant: "destructive",
+          });
+        }
+      },
+    });
+  };
 
   if (isLoading) {
     return (
@@ -42,6 +123,23 @@ export default function DossierHub() {
 
   const stepIndex = getCurrentStepIndex(dossier.status);
   const canSubmit = dossier.status === "entrepreneur_report_ready";
+  const docCount = docs?.length ?? 0;
+  const blockingCount = conditions?.filter(c => c.type === 'blocking' && c.status === 'open').length ?? 0;
+
+  const prevalidationReadyStatuses = new Set([
+    "intake_in_progress",
+    "documents_uploaded",
+    "blocked_missing_documents",
+    "blocked_invalid_documents",
+    "ready_for_ai_analysis",
+    "entrepreneur_report_ready",
+  ]);
+  const showPrevalidationButton =
+    prevalidationReadyStatuses.has(dossier.status) && docCount > 0;
+  const showAnalysisButton =
+    dossier.status === "ready_for_ai_analysis" ||
+    dossier.status === "entrepreneur_report_ready";
+  const analysisBlocked = blockingCount > 0;
 
   const handleSubmitToBank = () => {
     submitMutation.mutate(undefined, {
@@ -153,6 +251,66 @@ export default function DossierHub() {
           </Link>
         </div>
       </div>
+
+      {(showPrevalidationButton || showAnalysisButton) && (
+        <Card className="border-primary/30 shadow-sm">
+          <CardContent className="p-6 space-y-4">
+            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+              <div>
+                <h3 className="text-lg font-medium flex items-center gap-2">
+                  <BrainCircuit className="w-5 h-5 text-primary" /> AI-pre-validatie & analyse
+                </h3>
+                <p className="text-sm text-muted-foreground">
+                  Laat de AI je dossier checken voordat je het indient bij Geenbank.
+                </p>
+              </div>
+              <div className="flex flex-col md:flex-row gap-2">
+                {showPrevalidationButton && (
+                  <Button
+                    variant="outline"
+                    onClick={handleRunPrevalidation}
+                    disabled={prevalidationMutation.isPending || analysisMutation.isPending}
+                  >
+                    {prevalidationMutation.isPending
+                      ? <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      : <PlayCircle className="w-4 h-4 mr-2" />}
+                    Start pre-validatie
+                  </Button>
+                )}
+                {showAnalysisButton && (
+                  <Button
+                    onClick={handleRunAnalysis}
+                    disabled={analysisMutation.isPending || prevalidationMutation.isPending || analysisBlocked}
+                  >
+                    {analysisMutation.isPending
+                      ? <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      : <Sparkles className="w-4 h-4 mr-2" />}
+                    Start AI-analyse
+                  </Button>
+                )}
+              </div>
+            </div>
+            {prevalidationMutation.isSuccess && !prevalidationMutation.isPending && (
+              <Alert>
+                <CheckCircle2 className="w-4 h-4" />
+                <AlertTitle>Pre-validatie afgerond</AlertTitle>
+                <AlertDescription>
+                  Open het rapport om de uitkomst te zien.
+                </AlertDescription>
+              </Alert>
+            )}
+            {analysisBlocked && (
+              <Alert variant="destructive" className="bg-destructive/10 border-destructive/20 text-destructive">
+                <AlertCircle className="w-4 h-4" />
+                <AlertTitle>AI-analyse geblokkeerd</AlertTitle>
+                <AlertDescription>
+                  Los eerst de openstaande aandachtspunten op uit het rapport.
+                </AlertDescription>
+              </Alert>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       {/* Submission Card */}
       {stepIndex >= 3 && dossier.status !== "closed" && (

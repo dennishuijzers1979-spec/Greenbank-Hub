@@ -32,6 +32,39 @@ export default function DossierDetail() {
   const [selectedPartners, setSelectedPartners] = useState<string[]>([]);
   const [isDecisionDialogOpen, setIsDecisionDialogOpen] = useState(false);
   const [decisionType, setDecisionType] = useState<"approve" | "reject" | "request_additional_info" | null>(null);
+  const [downloadingId, setDownloadingId] = useState<string | null>(null);
+
+  const handleDownload = async (docId: string, filename: string) => {
+    setDownloadingId(docId);
+    try {
+      const url = `${import.meta.env.BASE_URL}api/documents/${docId}/content`;
+      const res = await fetch(url, { credentials: "include" });
+      if (!res.ok) {
+        let message = "Download niet beschikbaar.";
+        try {
+          const body = await res.json();
+          if (body && typeof body.error === "string") message = body.error;
+        } catch {
+          // ignore parse error
+        }
+        toast({ title: "Download mislukt", description: message, variant: "destructive" });
+        return;
+      }
+      const blob = await res.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = objectUrl;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(objectUrl);
+    } catch {
+      toast({ title: "Download mislukt", description: "Probeer het later opnieuw.", variant: "destructive" });
+    } finally {
+      setDownloadingId(null);
+    }
+  };
 
   const { data: dossier, isLoading } = useGetDossier(id, { query: { queryKey: getGetDossierQueryKey(id), enabled: !!id } });
   const { data: report } = useGetFinancierReport(id, { query: { queryKey: getGetFinancierReportQueryKey(id), enabled: !!id } });
@@ -286,7 +319,17 @@ export default function DossierDetail() {
                         <span className={`text-xs px-2 py-1 rounded ${doc.validationStatus === 'valid' ? 'bg-green-100 text-green-800' : 'bg-amber-100 text-amber-800'}`}>
                           {doc.validationStatus === 'valid' ? 'Gevalideerd' : 'Niet gevalideerd'}
                         </span>
-                        <Button variant="ghost" size="sm" className="h-8"><Download className="w-4 h-4" /></Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-8"
+                          onClick={() => handleDownload(doc.id, doc.filename)}
+                          disabled={downloadingId === doc.id}
+                        >
+                          {downloadingId === doc.id
+                            ? <Loader2 className="w-4 h-4 animate-spin" />
+                            : <Download className="w-4 h-4" />}
+                        </Button>
                       </div>
                     </div>
                   ))}

@@ -16,7 +16,10 @@ import {
 import { requireAuth } from "../lib/auth";
 import { logActivity } from "../lib/activity";
 import { serializeRun } from "../lib/serializers";
-import { skillOrchestrationService } from "../lib/skill-orchestration";
+import {
+  skillOrchestrationService,
+  checkRunAnalysisGate,
+} from "../lib/skill-orchestration";
 import { officerCanAccessDossier } from "../lib/dossier-access";
 
 const router: IRouter = Router();
@@ -81,6 +84,22 @@ router.post(
     const ctx = await loadMyDossier(req.user!.id);
     if (!ctx) {
       res.status(404).json({ error: "Geen dossier" });
+      return;
+    }
+    const gate = await checkRunAnalysisGate(ctx.dossier.id);
+    if (!gate.ok) {
+      res.status(409).json({
+        error: "AI-analyse geblokkeerd",
+        message:
+          "Je dossier voldoet nog niet aan de eisen voor de volledige AI-analyse.",
+        reasons: gate.reasons,
+        actions: gate.actions,
+        missingDocuments: gate.missingDocuments,
+        invalidDocuments: gate.invalidDocuments,
+        blockingConditions: gate.blockingConditions,
+        scores: gate.scores,
+        thresholds: gate.thresholds,
+      });
       return;
     }
     const { runId } = await skillOrchestrationService.runFullAnalysis(

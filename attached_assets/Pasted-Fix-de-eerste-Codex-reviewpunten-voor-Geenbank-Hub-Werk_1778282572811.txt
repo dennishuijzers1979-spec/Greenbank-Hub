@@ -1,0 +1,81 @@
+Fix de eerste Codex reviewpunten voor Geenbank Hub. Werk gericht, geen grote rewrite.
+
+1. Loan officer dashboard access
+De route /api/dashboard/loan-officer mag alleen dossiers tonen/tellen die zichtbaar zijn voor loan officers.
+Gebruik dezelfde OFFICER_VISIBLE_STATUSES / isOfficerVisibleStatus logica als de dossierlijst.
+Geen intake_in_progress, documents_uploaded, ready_for_ai_analysis of andere pre-submission dossiers mogen in totals, quality buckets, pipeline, stuck prospects of daily intake terechtkomen.
+
+2. Prospect AI flow in UI
+Voeg duidelijke knoppen toe in de prospect dossierflow:
+- “Start pre-validatie”
+- daarna, als pre-validatie slaagt: “Start AI-analyse”
+Gebruik de bestaande API hooks/endpoints:
+- POST /api/dossiers/me/run-prevalidation
+- POST /api/dossiers/me/run-analysis
+Toon loading, success, error en blocked states.
+Na succes: dossier, rapport en conditions queries refreshen.
+
+3. Server-side AI gating
+Blokkeer /api/dossiers/me/run-analysis server-side als:
+- verplichte documenten ontbreken
+- documenten invalid/unreadable zijn
+- completeness/correctness/confidence onder drempel is
+- blocking conditions openstaan
+Return 409 met duidelijke Nederlandse uitleg en concrete acties.
+De frontend mag dit tonen, maar de backend moet de echte gate afdwingen.
+
+4. Documenttype mapping herstellen
+Maak documenttypes consistent tussen frontend upload en backend AI-completeness check.
+Ondersteun minimaal:
+- annual_accounts
+- bank_statements
+- kvk_extract
+- id_document
+- forecast
+- business_plan
+- other
+Zorg dat de UI de gebruiker expliciet laat kiezen welk documenttype hij uploadt. Niet alleen raden op bestandsnaam.
+Update de completeness check zodat deze exact deze types gebruikt.
+
+5. Server-side file validation versterken
+Backend moet naast MIME type ook extensie en echte file signature/magic bytes controleren waar praktisch:
+- PDF
+- XLSX
+- CSV
+- DOCX
+- PNG
+- JPG/JPEG
+Blokkeer mismatch tussen extensie, MIME en content.
+Houd max size consistent tussen UI en backend, bijvoorbeeld 20MB.
+
+6. Skill adapters duidelijker maken
+Splits de skill adapter objecten uit skill-orchestration.ts naar aparte bestanden of duidelijke modules:
+- CreditProductAdvisorAdapter
+- FinancingNeedAssessorAdapter
+- FinancingProductAdvisorDualViewAdapter
+- GeenbankKredietworkflowAdapter
+- MoneycareKredietmemorandumAdapter
+Elke adapter moet typed input/output hebben, mock fallback, error handling en logging.
+SkillOrchestrationService blijft de pipeline aansturen.
+Sla per AIAnalysisRun duidelijk op welke modules gebruikt zijn en of mock mode gebruikt is.
+
+7. Loan officer document download
+Maak de downloadknop in dossierdetail functioneel.
+Gebruik /api/documents/:documentId/content.
+Alleen officer/admin mag documenten downloaden van officer-visible dossiers.
+Prospects mogen alleen eigen documenten downloaden.
+Toon foutmelding als demo/mock documentinhoud niet beschikbaar is.
+
+8. Run checks
+Na fixen:
+- pnpm run typecheck
+- pnpm run build
+- test handmatig prospect login, upload, pre-validatie, AI-analyse, rapport, submit naar Geenbank
+- test loan officer login, dashboard, dossierdetail, decision, memorandum, partner submission mock
+
+Rapporteer daarna:
+- welke bestanden gewijzigd zijn
+- welke issues gefixt zijn
+- welke integraties nog mock zijn
+- testresultaten
+- bekende beperkingen

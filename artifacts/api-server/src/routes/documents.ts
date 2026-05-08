@@ -21,6 +21,8 @@ import {
   readDocument,
   deleteDocument as removeStoredFile,
 } from "../lib/document-storage";
+import { validateFileSignature } from "../lib/file-signature";
+import { SUPPORTED_DOCUMENT_TYPES } from "../lib/skills";
 
 const router: IRouter = Router();
 
@@ -29,12 +31,16 @@ const ALLOWED_MIME = new Set([
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   "application/vnd.ms-excel",
   "text/csv",
+  "application/csv",
+  "text/plain",
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
   "application/msword",
+  "application/octet-stream",
   "image/png",
   "image/jpeg",
 ]);
 const MAX_BYTES = 20 * 1024 * 1024;
+const SUPPORTED_TYPES = new Set<string>(SUPPORTED_DOCUMENT_TYPES);
 
 router.get(
   "/dossiers/me/documents",
@@ -76,6 +82,12 @@ router.post(
       res.status(400).json({ error: parsed.error.message });
       return;
     }
+    if (!SUPPORTED_TYPES.has(parsed.data.documentType)) {
+      res.status(400).json({
+        error: `Documenttype '${parsed.data.documentType}' wordt niet ondersteund.`,
+      });
+      return;
+    }
     if (!ALLOWED_MIME.has(parsed.data.mimeType)) {
       res.status(415).json({ error: "Bestandstype niet toegestaan" });
       return;
@@ -88,6 +100,22 @@ router.post(
       res
         .status(400)
         .json({ error: "Bestand ontbreekt — voeg base64-inhoud toe." });
+      return;
+    }
+    const contentBuffer = Buffer.from(parsed.data.contentBase64, "base64");
+    if (contentBuffer.length > MAX_BYTES) {
+      res.status(413).json({ error: "Bestand groter dan 20 MB" });
+      return;
+    }
+    const sigCheck = validateFileSignature({
+      filename: parsed.data.filename,
+      mimeType: parsed.data.mimeType,
+      buffer: contentBuffer,
+    });
+    if (!sigCheck.ok) {
+      res.status(415).json({
+        error: `Bestand geweigerd: ${sigCheck.reason ?? "inhoud komt niet overeen met type."}`,
+      });
       return;
     }
     const [prospect] = await db
