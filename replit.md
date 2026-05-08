@@ -1,45 +1,45 @@
-# [Project name]
+# Geenbank Hub
 
-_Replace the heading above with the project's name, and this line with one sentence describing what this app does for users._
+A Dutch (NL) full-stack pilot product that converts Geenbank-disqualified
+leads into AI-pre-validated financing dossiers ready for alternative
+financiers. All UI copy is in Dutch.
 
-## Run & Operate
+## Architecture
 
-- `pnpm --filter @workspace/api-server run dev` — run the API server (port 5000)
-- `pnpm run typecheck` — full typecheck across all packages
-- `pnpm run build` — typecheck + build all packages
-- `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
-- `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
-- Required env: `DATABASE_URL` — Postgres connection string
+- **Backend** — `artifacts/api-server` (Express 5 + Drizzle + Postgres)
+- **Frontend** — `artifacts/geenbank-hub` (React + Vite + wouter + shadcn + Tailwind + Recharts)
+- **Shared schema** — `lib/db` (Drizzle), `lib/api-spec` (OpenAPI), `lib/api-zod`, `lib/api-client-react` (generated Orval hooks)
+- **Auth** — cookie sessions (`geenbank_session`) + bcryptjs password hashing
+- **Database** — 9 entities: users, sessions, prospect_profiles, dossiers, documents, ai_analysis_runs, conditions, partner_financiers, partner_submissions, activity_logs
 
-## Stack
+## AI pipeline
 
-- pnpm workspaces, Node.js 24, TypeScript 5.9
-- API: Express 5
-- DB: PostgreSQL + Drizzle ORM
-- Validation: Zod (`zod/v4`), `drizzle-zod`
-- API codegen: Orval (from OpenAPI spec)
-- Build: esbuild (CJS bundle)
+Five skill modules orchestrated server-side: `CreditProductAdvisor`,
+`FinancingNeedAssessor`, `FinancingProductAdvisorDualView`,
+`GeenbankKredietworkflow`, `MoneycareKredietmemorandum`. The pipeline runs
+deterministically when no `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` is set, so
+the product is fully functional out of the box.
 
-## Where things live
+## Integrations
 
-_Populate as you build — short repo map plus pointers to the source-of-truth file for DB schema, API contracts, theme files, etc._
+Pipedrive and SendGrid use a mock-mode fallback when no credentials are
+configured (calls are logged but not delivered). The `/api/integrations/status`
+endpoint and admin page expose live/mock status for each integration.
 
-## Architecture decisions
+## Demo accounts
 
-_Populate as you build — non-obvious choices a reader couldn't infer from the code (3-5 bullets)._
+All demo accounts use password `Welkom2025!`.
 
-## Product
+| Role | Email |
+| --- | --- |
+| Admin | `admin@geenbank.nl` |
+| Loan officer | `maarten@geenbank.nl` |
+| Prospect (active) | `anne@brouwerij-noord.nl` |
+| Prospect (intake in progress) | `joris@nordhaven-cycles.nl` (forced password change) |
+| Prospect (in review) | `fatima@studio-meridian.nl` |
 
-_Describe the high-level user-facing capabilities of this app once they exist._
+Seed data is created automatically on first server start.
 
 ## User preferences
 
-_Populate as you build — explicit user instructions worth remembering across sessions._
-
-## Gotchas
-
-_Populate as you build — sharp edges, "always run X before Y" rules._
-
-## Pointers
-
-- See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details
+(none yet)

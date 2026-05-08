@@ -1,36 +1,1091 @@
 openapi: 3.1.0
 info:
-  # Do not change the title, if the title changes, the import paths will be broken
   title: Api
   version: 0.1.0
-  description: API specification
+  description: Geenbank Hub API
 servers:
   - url: /api
     description: Base API path
 tags:
   - name: health
-    description: Health operations
+  - name: auth
+  - name: dossiers
+  - name: documents
+  - name: ai
+  - name: reports
+  - name: conditions
+  - name: partners
+  - name: submissions
+  - name: dashboard
+  - name: activity
+  - name: integrations
 paths:
   /healthz:
     get:
       operationId: healthCheck
       tags: [health]
       summary: Health check
-      description: Returns server health status
       responses:
         "200":
-          description: Healthy
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/HealthStatus" }
+
+  /auth/login:
+    post:
+      operationId: login
+      tags: [auth]
+      summary: Login with email and password
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LoginRequest" }
+      responses:
+        "200":
+          description: Logged in
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuthSession" }
+
+  /auth/logout:
+    post:
+      operationId: logout
+      tags: [auth]
+      summary: Logout
+      responses:
+        "200":
+          description: Logged out
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Ok" }
+
+  /auth/me:
+    get:
+      operationId: getCurrentUser
+      tags: [auth]
+      summary: Get current authenticated user
+      responses:
+        "200":
+          description: Current user (or null)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuthSession" }
+
+  /auth/change-password:
+    post:
+      operationId: changePassword
+      tags: [auth]
+      summary: Set a new password (used on first login)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ChangePasswordRequest" }
+      responses:
+        "200":
+          description: Password updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Ok" }
+
+  /dossiers/me:
+    get:
+      operationId: getMyDossier
+      tags: [dossiers]
+      summary: Get the authenticated prospect's dossier
+      responses:
+        "200":
+          description: My dossier
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Dossier" }
+
+  /dossiers/me/intake:
+    put:
+      operationId: updateMyIntake
+      tags: [dossiers]
+      summary: Update intake fields on the prospect's own dossier
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/IntakeUpdate" }
+      responses:
+        "200":
+          description: Updated dossier
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Dossier" }
+
+  /dossiers/me/submit:
+    post:
+      operationId: submitMyDossier
+      tags: [dossiers]
+      summary: Submit dossier to Geenbank for loan officer review
+      responses:
+        "200":
+          description: Submitted dossier
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Dossier" }
+
+  /dossiers:
+    get:
+      operationId: listDossiers
+      tags: [dossiers]
+      summary: List dossiers (loan officer / admin)
+      parameters:
+        - in: query
+          name: bucket
+          required: false
+          schema:
+            type: string
+            enum: [all, new, in_review, ready, additional_info, approved, rejected]
+      responses:
+        "200":
+          description: Dossiers
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/HealthStatus"
+                type: array
+                items: { $ref: "#/components/schemas/DossierListItem" }
+
+  /dossiers/{dossierId}:
+    get:
+      operationId: getDossier
+      tags: [dossiers]
+      summary: Get a dossier by id (loan officer / admin)
+      parameters:
+        - in: path
+          name: dossierId
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Dossier
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Dossier" }
+
+  /dossiers/{dossierId}/decision:
+    post:
+      operationId: makeDossierDecision
+      tags: [dossiers]
+      summary: Approve, reject, or request additional information
+      parameters:
+        - in: path
+          name: dossierId
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DecisionRequest" }
+      responses:
+        "200":
+          description: Updated dossier
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Dossier" }
+
+  /dossiers/me/documents:
+    get:
+      operationId: listMyDocuments
+      tags: [documents]
+      summary: List the prospect's own documents
+      responses:
+        "200":
+          description: Documents
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Document" }
+    post:
+      operationId: uploadMyDocument
+      tags: [documents]
+      summary: Upload a document to the prospect's own dossier (mock storage)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DocumentUpload" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Document" }
+
+  /dossiers/me/documents/{documentId}:
+    delete:
+      operationId: deleteMyDocument
+      tags: [documents]
+      summary: Delete a document from the prospect's own dossier
+      parameters:
+        - in: path
+          name: documentId
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Ok" }
+
+  /dossiers/{dossierId}/documents:
+    get:
+      operationId: listDossierDocuments
+      tags: [documents]
+      summary: List documents on a specific dossier (loan officer / admin)
+      parameters:
+        - in: path
+          name: dossierId
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Documents
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Document" }
+
+  /dossiers/me/run-prevalidation:
+    post:
+      operationId: runMyPrevalidation
+      tags: [ai]
+      summary: Trigger pre-validation pipeline for the prospect's dossier
+      responses:
+        "200":
+          description: New analysis run
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AIAnalysisRun" }
+
+  /dossiers/me/run-analysis:
+    post:
+      operationId: runMyAnalysis
+      tags: [ai]
+      summary: Trigger full AI analysis for the prospect's dossier
+      responses:
+        "200":
+          description: New analysis run
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AIAnalysisRun" }
+
+  /dossiers/{dossierId}/runs:
+    get:
+      operationId: listDossierRuns
+      tags: [ai]
+      summary: List analysis runs for a dossier
+      parameters:
+        - in: path
+          name: dossierId
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Runs
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/AIAnalysisRun" }
+
+  /dossiers/{dossierId}/latest-run:
+    get:
+      operationId: getLatestRun
+      tags: [ai]
+      summary: Get the latest analysis run for a dossier
+      parameters:
+        - in: path
+          name: dossierId
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Latest run
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AIAnalysisRun" }
+
+  /dossiers/me/report:
+    get:
+      operationId: getMyEntrepreneurReport
+      tags: [reports]
+      summary: Get entrepreneur-facing report from latest run
+      responses:
+        "200":
+          description: Report
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EntrepreneurReport" }
+
+  /dossiers/{dossierId}/financier-report:
+    get:
+      operationId: getFinancierReport
+      tags: [reports]
+      summary: Get financier-facing report
+      parameters:
+        - in: path
+          name: dossierId
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Report
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FinancierReport" }
+
+  /dossiers/{dossierId}/memorandum:
+    post:
+      operationId: generateMemorandum
+      tags: [reports]
+      summary: Generate credit memorandum
+      parameters:
+        - in: path
+          name: dossierId
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Memorandum
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CreditMemorandum" }
+    get:
+      operationId: getMemorandum
+      tags: [reports]
+      summary: Get latest credit memorandum (if generated)
+      parameters:
+        - in: path
+          name: dossierId
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Memorandum
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CreditMemorandum" }
+
+  /dossiers/{dossierId}/conditions:
+    get:
+      operationId: listConditions
+      tags: [conditions]
+      summary: List blocking and non-blocking conditions for a dossier
+      parameters:
+        - in: path
+          name: dossierId
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Conditions
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Condition" }
+
+  /dossiers/me/conditions:
+    get:
+      operationId: listMyConditions
+      tags: [conditions]
+      summary: List conditions for the prospect's own dossier
+      responses:
+        "200":
+          description: Conditions
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Condition" }
+
+  /partners:
+    get:
+      operationId: listPartners
+      tags: [partners]
+      summary: List partner financiers
+      responses:
+        "200":
+          description: Partners
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/PartnerFinancier" }
+    post:
+      operationId: createPartner
+      tags: [partners]
+      summary: Create a partner financier
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PartnerInput" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PartnerFinancier" }
+
+  /partners/{partnerId}:
+    put:
+      operationId: updatePartner
+      tags: [partners]
+      summary: Update a partner financier
+      parameters:
+        - in: path
+          name: partnerId
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PartnerInput" }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PartnerFinancier" }
+
+  /dossiers/{dossierId}/submissions:
+    get:
+      operationId: listDossierSubmissions
+      tags: [submissions]
+      summary: List partner submissions for a dossier
+      parameters:
+        - in: path
+          name: dossierId
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Submissions
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/PartnerSubmission" }
+    post:
+      operationId: submitDossierToPartners
+      tags: [submissions]
+      summary: Send dossier package to selected partner financiers
+      parameters:
+        - in: path
+          name: dossierId
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PartnerSubmissionRequest" }
+      responses:
+        "200":
+          description: Submitted
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/PartnerSubmission" }
+
+  /dashboard/loan-officer:
+    get:
+      operationId: getLoanOfficerDashboard
+      tags: [dashboard]
+      summary: Aggregated metrics, quality buckets, and pipeline view
+      responses:
+        "200":
+          description: Dashboard
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LoanOfficerDashboard" }
+
+  /dashboard/admin-metrics:
+    get:
+      operationId: getAdminMetrics
+      tags: [dashboard]
+      summary: Admin metrics (partners, submissions, conversion)
+      responses:
+        "200":
+          description: Metrics
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminMetrics" }
+
+  /activity:
+    get:
+      operationId: listRecentActivity
+      tags: [activity]
+      summary: Most recent activity log entries (loan officer / admin)
+      parameters:
+        - in: query
+          name: limit
+          schema: { type: integer, default: 25 }
+      responses:
+        "200":
+          description: Activity
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/ActivityLogEntry" }
+
+  /integrations/status:
+    get:
+      operationId: getIntegrationsStatus
+      tags: [integrations]
+      summary: Show whether Pipedrive, SendGrid, and AI skills are live or in mock mode
+      responses:
+        "200":
+          description: Status
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/IntegrationsStatus" }
+
 components:
   schemas:
     HealthStatus:
       type: object
       properties:
-        status:
-          type: string
-      required:
-        - status
+        status: { type: string }
+      required: [status]
 
+    Ok:
+      type: object
+      properties:
+        ok: { type: boolean }
+      required: [ok]
+
+    Role:
+      type: string
+      enum: [prospect, loan_officer, admin]
+
+    DossierStatus:
+      type: string
+      enum:
+        - lead_created
+        - account_invited
+        - prospect_logged_in
+        - intake_in_progress
+        - documents_uploaded
+        - pre_validation_running
+        - blocked_missing_documents
+        - blocked_invalid_documents
+        - ready_for_ai_analysis
+        - ai_analysis_running
+        - entrepreneur_report_ready
+        - submitted_to_geenbank
+        - loan_officer_review
+        - additional_info_requested
+        - approved_for_partner_submission
+        - rejected_by_loan_officer
+        - memorandum_generated
+        - submitted_to_partners
+        - partner_response_received
+        - closed
+
+    LoginRequest:
+      type: object
+      properties:
+        email: { type: string }
+        password: { type: string }
+      required: [email, password]
+
+    ChangePasswordRequest:
+      type: object
+      properties:
+        currentPassword: { type: string }
+        newPassword: { type: string }
+      required: [currentPassword, newPassword]
+
+    AuthUser:
+      type: object
+      properties:
+        id: { type: string }
+        email: { type: string }
+        role: { $ref: "#/components/schemas/Role" }
+        firstLoginCompleted: { type: boolean }
+        displayName: { type: string, nullable: true }
+      required: [id, email, role, firstLoginCompleted]
+
+    AuthSession:
+      type: object
+      properties:
+        user:
+          oneOf:
+            - $ref: "#/components/schemas/AuthUser"
+            - type: "null"
+      required: [user]
+
+    ProspectProfile:
+      type: object
+      properties:
+        id: { type: string }
+        userId: { type: string }
+        companyName: { type: string }
+        contactName: { type: string }
+        kvkNumber: { type: string, nullable: true }
+        phone: { type: string, nullable: true }
+        source: { type: string, nullable: true }
+        pipedriveDealId: { type: string, nullable: true }
+        createdAt: { type: string }
+      required: [id, userId, companyName, contactName, createdAt]
+
+    Dossier:
+      type: object
+      properties:
+        id: { type: string }
+        prospectId: { type: string }
+        prospect: { $ref: "#/components/schemas/ProspectProfile" }
+        status: { $ref: "#/components/schemas/DossierStatus" }
+        currentStage: { type: string }
+        financingPurpose: { type: string, nullable: true }
+        requestedAmount: { type: number, nullable: true }
+        financingTypePreference: { type: string, nullable: true }
+        existingFinancing: { type: string, nullable: true }
+        annualRevenue: { type: number, nullable: true }
+        annualCost: { type: number, nullable: true }
+        annualProfit: { type: number, nullable: true }
+        companyDescription: { type: string, nullable: true }
+        completenessScore: { type: number, nullable: true }
+        correctnessScore: { type: number, nullable: true }
+        viabilityScore: { type: number, nullable: true }
+        confidenceScore: { type: number, nullable: true }
+        aiVerdict: { type: string, nullable: true }
+        loanOfficerDecision: { type: string, nullable: true }
+        loanOfficerNotes: { type: string, nullable: true }
+        submittedAt: { type: string, nullable: true }
+        createdAt: { type: string }
+        updatedAt: { type: string }
+        intakeCompletionPercent: { type: number }
+        documentsCount: { type: integer }
+        blockingConditionsCount: { type: integer }
+      required:
+        - id
+        - prospectId
+        - status
+        - currentStage
+        - createdAt
+        - updatedAt
+        - intakeCompletionPercent
+        - documentsCount
+        - blockingConditionsCount
+
+    DossierListItem:
+      type: object
+      properties:
+        id: { type: string }
+        companyName: { type: string }
+        contactName: { type: string }
+        status: { $ref: "#/components/schemas/DossierStatus" }
+        currentStage: { type: string }
+        requestedAmount: { type: number, nullable: true }
+        financingPurpose: { type: string, nullable: true }
+        completenessScore: { type: number, nullable: true }
+        correctnessScore: { type: number, nullable: true }
+        viabilityScore: { type: number, nullable: true }
+        confidenceScore: { type: number, nullable: true }
+        aiVerdict: { type: string, nullable: true }
+        submittedAt: { type: string, nullable: true }
+        updatedAt: { type: string }
+        bucket: { type: string }
+      required:
+        - id
+        - companyName
+        - contactName
+        - status
+        - currentStage
+        - updatedAt
+        - bucket
+
+    IntakeUpdate:
+      type: object
+      properties:
+        companyName: { type: string, nullable: true }
+        contactName: { type: string, nullable: true }
+        kvkNumber: { type: string, nullable: true }
+        phone: { type: string, nullable: true }
+        financingPurpose: { type: string, nullable: true }
+        requestedAmount: { type: number, nullable: true }
+        financingTypePreference: { type: string, nullable: true }
+        existingFinancing: { type: string, nullable: true }
+        annualRevenue: { type: number, nullable: true }
+        annualCost: { type: number, nullable: true }
+        annualProfit: { type: number, nullable: true }
+        companyDescription: { type: string, nullable: true }
+
+    Document:
+      type: object
+      properties:
+        id: { type: string }
+        dossierId: { type: string }
+        uploadedBy: { type: string }
+        documentType: { type: string }
+        filename: { type: string }
+        mimeType: { type: string }
+        sizeBytes: { type: integer }
+        storagePath: { type: string }
+        uploadStatus: { type: string }
+        validationStatus: { type: string }
+        extractedDataStatus: { type: string }
+        usedInAnalysis: { type: boolean }
+        validationNotes: { type: string, nullable: true }
+        createdAt: { type: string }
+      required:
+        - id
+        - dossierId
+        - uploadedBy
+        - documentType
+        - filename
+        - mimeType
+        - sizeBytes
+        - uploadStatus
+        - validationStatus
+        - extractedDataStatus
+        - usedInAnalysis
+        - createdAt
+
+    DocumentUpload:
+      type: object
+      properties:
+        documentType: { type: string }
+        filename: { type: string }
+        mimeType: { type: string }
+        sizeBytes: { type: integer }
+        contentBase64: { type: string, nullable: true }
+      required: [documentType, filename, mimeType, sizeBytes]
+
+    AIAnalysisRun:
+      type: object
+      properties:
+        id: { type: string }
+        dossierId: { type: string }
+        runType: { type: string }
+        status: { type: string }
+        startedAt: { type: string }
+        completedAt: { type: string, nullable: true }
+        skillModulesUsed:
+          type: array
+          items: { type: string }
+        completenessScore: { type: number, nullable: true }
+        correctnessScore: { type: number, nullable: true }
+        viabilityScore: { type: number, nullable: true }
+        confidenceScore: { type: number, nullable: true }
+        verdict: { type: string, nullable: true }
+        verdictSummary: { type: string, nullable: true }
+        usedMockMode: { type: boolean }
+        errors:
+          type: array
+          items: { type: string }
+      required:
+        - id
+        - dossierId
+        - runType
+        - status
+        - startedAt
+        - skillModulesUsed
+        - usedMockMode
+        - errors
+
+    EntrepreneurReport:
+      type: object
+      properties:
+        dossierId: { type: string }
+        runId: { type: string, nullable: true }
+        generatedAt: { type: string, nullable: true }
+        headline: { type: string }
+        summary: { type: string }
+        verdict: { type: string, nullable: true }
+        viabilityScore: { type: number, nullable: true }
+        confidenceScore: { type: number, nullable: true }
+        strongPoints:
+          type: array
+          items: { type: string }
+        weakPoints:
+          type: array
+          items: { type: string }
+        actionPoints:
+          type: array
+          items: { type: string }
+        likelyFinancierAsks:
+          type: array
+          items: { type: string }
+        canSubmit: { type: boolean }
+      required:
+        - dossierId
+        - headline
+        - summary
+        - strongPoints
+        - weakPoints
+        - actionPoints
+        - likelyFinancierAsks
+        - canSubmit
+
+    FinancierReport:
+      type: object
+      properties:
+        dossierId: { type: string }
+        runId: { type: string, nullable: true }
+        generatedAt: { type: string, nullable: true }
+        companySummary: { type: string }
+        financingRequest: { type: string }
+        financialAnalysis: { type: string }
+        repaymentCapacity: { type: string }
+        riskFactors:
+          type: array
+          items: { type: string }
+        strengths:
+          type: array
+          items: { type: string }
+        recommendation: { type: string }
+        verdict: { type: string, nullable: true }
+        viabilityScore: { type: number, nullable: true }
+        confidenceScore: { type: number, nullable: true }
+      required:
+        - dossierId
+        - companySummary
+        - financingRequest
+        - financialAnalysis
+        - repaymentCapacity
+        - riskFactors
+        - strengths
+        - recommendation
+
+    CreditMemorandum:
+      type: object
+      properties:
+        dossierId: { type: string }
+        generatedAt: { type: string }
+        usedMockMode: { type: boolean }
+        sections:
+          type: array
+          items: { $ref: "#/components/schemas/MemorandumSection" }
+        attachments:
+          type: array
+          items: { type: string }
+        partnerNotes: { type: string, nullable: true }
+      required: [dossierId, generatedAt, usedMockMode, sections, attachments]
+
+    MemorandumSection:
+      type: object
+      properties:
+        title: { type: string }
+        body: { type: string }
+      required: [title, body]
+
+    Condition:
+      type: object
+      properties:
+        id: { type: string }
+        dossierId: { type: string }
+        type: { type: string, enum: [blocking, non_blocking] }
+        title: { type: string }
+        description: { type: string }
+        requiredAction: { type: string, nullable: true }
+        status: { type: string }
+        createdAt: { type: string }
+      required: [id, dossierId, type, title, description, status, createdAt]
+
+    DecisionRequest:
+      type: object
+      properties:
+        decision:
+          type: string
+          enum: [approve, reject, request_additional_info]
+        notes: { type: string, nullable: true }
+        requestedItems:
+          type: array
+          items: { type: string }
+      required: [decision]
+
+    PartnerFinancier:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        contactEmail: { type: string }
+        productFocus: { type: string }
+        minimumTicketSize: { type: number, nullable: true }
+        maximumTicketSize: { type: number, nullable: true }
+        activeStatus: { type: string }
+        notes: { type: string, nullable: true }
+        submissionsCount: { type: integer }
+        acceptedCount: { type: integer }
+        createdAt: { type: string }
+      required:
+        - id
+        - name
+        - contactEmail
+        - productFocus
+        - activeStatus
+        - submissionsCount
+        - acceptedCount
+        - createdAt
+
+    PartnerInput:
+      type: object
+      properties:
+        name: { type: string }
+        contactEmail: { type: string }
+        productFocus: { type: string }
+        minimumTicketSize: { type: number, nullable: true }
+        maximumTicketSize: { type: number, nullable: true }
+        activeStatus: { type: string }
+        notes: { type: string, nullable: true }
+      required: [name, contactEmail, productFocus, activeStatus]
+
+    PartnerSubmission:
+      type: object
+      properties:
+        id: { type: string }
+        dossierId: { type: string }
+        partnerId: { type: string }
+        partnerName: { type: string }
+        status: { type: string }
+        submittedAt: { type: string, nullable: true }
+        packageSummary: { type: string, nullable: true }
+        responseStatus: { type: string, nullable: true }
+        responseNotes: { type: string, nullable: true }
+        usedMockMode: { type: boolean }
+      required: [id, dossierId, partnerId, partnerName, status, usedMockMode]
+
+    PartnerSubmissionRequest:
+      type: object
+      properties:
+        partnerIds:
+          type: array
+          items: { type: string }
+        notes: { type: string, nullable: true }
+      required: [partnerIds]
+
+    LoanOfficerDashboard:
+      type: object
+      properties:
+        totals:
+          type: object
+          properties:
+            newSubmitted: { type: integer }
+            inReview: { type: integer }
+            additionalInfoRequested: { type: integer }
+            approved: { type: integer }
+            rejected: { type: integer }
+            submittedToPartners: { type: integer }
+          required:
+            - newSubmitted
+            - inReview
+            - additionalInfoRequested
+            - approved
+            - rejected
+            - submittedToPartners
+        qualityBuckets:
+          type: array
+          items: { $ref: "#/components/schemas/QualityBucket" }
+        pipeline:
+          type: array
+          items: { $ref: "#/components/schemas/PipelineStage" }
+        stuckProspects:
+          type: array
+          items: { $ref: "#/components/schemas/StuckProspect" }
+        dailyIntake:
+          type: array
+          items: { $ref: "#/components/schemas/DailyIntakePoint" }
+      required: [totals, qualityBuckets, pipeline, stuckProspects, dailyIntake]
+
+    QualityBucket:
+      type: object
+      properties:
+        label: { type: string }
+        description: { type: string }
+        count: { type: integer }
+      required: [label, description, count]
+
+    PipelineStage:
+      type: object
+      properties:
+        stage: { type: string }
+        label: { type: string }
+        count: { type: integer }
+      required: [stage, label, count]
+
+    StuckProspect:
+      type: object
+      properties:
+        dossierId: { type: string }
+        companyName: { type: string }
+        stage: { type: string }
+        daysStuck: { type: integer }
+      required: [dossierId, companyName, stage, daysStuck]
+
+    DailyIntakePoint:
+      type: object
+      properties:
+        date: { type: string }
+        count: { type: integer }
+      required: [date, count]
+
+    AdminMetrics:
+      type: object
+      properties:
+        totalDossiers: { type: integer }
+        totalSubmittedToPartners: { type: integer }
+        activePartners: { type: integer }
+        averageViabilityScore: { type: number, nullable: true }
+        partnerPerformance:
+          type: array
+          items:
+            type: object
+            properties:
+              partnerId: { type: string }
+              partnerName: { type: string }
+              submissions: { type: integer }
+              accepted: { type: integer }
+            required: [partnerId, partnerName, submissions, accepted]
+      required:
+        - totalDossiers
+        - totalSubmittedToPartners
+        - activePartners
+        - partnerPerformance
+
+    ActivityLogEntry:
+      type: object
+      properties:
+        id: { type: string }
+        dossierId: { type: string, nullable: true }
+        actorType: { type: string }
+        actorId: { type: string, nullable: true }
+        actorLabel: { type: string, nullable: true }
+        action: { type: string }
+        description: { type: string }
+        createdAt: { type: string }
+      required: [id, actorType, action, description, createdAt]
+
+    IntegrationsStatus:
+      type: object
+      properties:
+        pipedrive: { $ref: "#/components/schemas/IntegrationStatus" }
+        sendgrid: { $ref: "#/components/schemas/IntegrationStatus" }
+        aiSkills: { $ref: "#/components/schemas/IntegrationStatus" }
+        objectStorage: { $ref: "#/components/schemas/IntegrationStatus" }
+      required: [pipedrive, sendgrid, aiSkills, objectStorage]
+
+    IntegrationStatus:
+      type: object
+      properties:
+        name: { type: string }
+        live: { type: boolean }
+        message: { type: string }
+      required: [name, live, message]
