@@ -1,0 +1,645 @@
+You are building a production-minded full-stack web app called “Geenbank Hub”.
+
+The app is a financing application hub for prospects who entered through Geenbank’s website but were disqualified from Geenbank’s core ICP. Instead of rejecting these leads, the hub helps them complete a structured financing file, upload and validate documents, run AI-based financial analysis through existing callable skills, and prepare qualified cases for a loan officer and eventually partner financiers.
+
+UI language: Dutch, Netherlands Dutch.
+Tone: clear, entrepreneurial, reassuring, direct, practical.
+Prospect-side copy must avoid bank jargon.
+Loan-officer/admin-side copy may use financier and credit language.
+
+Important architectural rule:
+Do not rebuild the financial AI skills from scratch. Treat these as existing callable skill modules that may be available to the Replit agent, backend, standard Replit capabilities, project-added skills, or custom skills placed inside this Replit project:
+
+- credit-product-advisor
+- financing-need-assessor
+- financing-product-advisor-dual-view
+- geenbank-kredietworkflow
+- moneycare-kredietmemorandum-fabriek
+
+Build the app so these skills are called server-side through a clear adapter/service layer. If the exact invocation interface is unknown, create clean placeholder adapters with typed inputs and outputs, clear TODOs, realistic mock responses for local development, and logging. The frontend flow must not need to change when the real skill calls are connected later.
+
+Before implementation, briefly state:
+1. chosen stack and why
+2. database/storage choice
+3. authentication approach
+4. document storage approach
+5. AI skill invocation architecture
+6. what will be mocked in the first build if secrets or external APIs are unavailable
+
+Stack selection:
+Choose the most suitable stack for this project. Prefer a maintainable full-stack web app with:
+- secure authentication
+- role-based access control
+- database persistence
+- file/document uploads
+- background AI processing jobs
+- email notifications
+- API integrations with Pipedrive and SendGrid
+- responsive, high-quality UI
+- Replit Deployments as first deployment target
+
+Use environment variables for all secrets. Do not expose API keys client-side. Prepare the app so it can later be connected to a custom domain.
+
+Core product outcome:
+The app must convert disqualified Geenbank leads into structured, validated financing dossiers that can either:
+- help the entrepreneur understand and improve their financing position, or
+- be reviewed by a loan officer and submitted to selected partner financiers.
+
+Primary users:
+1. Prospect / entrepreneur
+A business owner who needs financing but does not match Geenbank’s core ICP. The entrepreneur must be guided through a motivating, simple, clear financing intake experience.
+
+2. Loan officer / admin
+An internal Geenbank user who reviews only qualified, sufficiently complete, AI-prevalidated dossiers and decides whether the file is good enough to send to partner financiers.
+
+Non-negotiable product standard:
+Do not build a plain CRUD dashboard first and improve design later. The first build must already feel like a premium, innovative financing experience, not a generic form portal, CRM skin, or bank backoffice.
+
+The app must include from the first build:
+- strong visual identity direction
+- clear information hierarchy
+- polished layouts
+- premium UI components
+- smooth step-by-step user flow
+- excellent empty, loading, blocked, success, and error states
+- motivational microcopy
+- visual progress indicators
+- clear next-best-action guidance
+- responsive layouts
+- distinctive Geenbank feel
+
+Every screen must answer:
+1. What is happening?
+2. Why does this matter for the user’s financing goal?
+3. What does the user need to do next?
+4. What happens after this step?
+
+If a feature technically works but the flow feels confusing, dry, generic, or visually weak, it is not accepted.
+
+Main prospect workflow:
+1. A lead is disqualified on the Geenbank website.
+2. Zapier places the lead/deal in Pipedrive in pipeline “Geenbank | Banking Hub”, first stage.
+3. The app receives or fetches deal data through the Pipedrive API.
+4. The app creates a prospect account using the prospect’s email and a system-generated temporary password.
+5. The app sends login details through SendGrid.
+6. The prospect logs into a personal financing page.
+7. The prospect completes the application:
+   - company details
+   - financing need
+   - purpose of financing
+   - requested amount
+   - existing financing
+   - revenue/cost/profit information if available
+   - explanation of business situation
+   - required document uploads
+8. The app clearly shows which documents are needed and why they matter.
+9. The AI pre-validation agent checks:
+   - document completeness
+   - minimum document quality
+   - whether documents match the company/application
+   - whether essential figures can be extracted
+   - whether contradictory or obviously invalid data exists
+10. If the file is incomplete or minimally incorrect:
+   - block full AI evaluation
+   - show a clear explanation to the prospect
+   - show exactly what must be fixed or uploaded
+   - allow re-upload and re-validation
+11. If the file passes completeness and minimum correctness:
+   - run financial AI analysis through the available skill modules
+   - generate an entrepreneur-facing report
+12. The entrepreneur sees:
+   - current application status
+   - strong points in the financing file
+   - weak/improvable points
+   - practical action points
+   - what Geenbank or partner financiers are likely to need
+13. If the AI verdict is positive enough, the entrepreneur can click “Indienen bij Geenbank”.
+14. After submission, the entrepreneur can keep following the status.
+
+Main loan officer/admin workflow:
+1. Loan officer logs in through a separate admin login.
+2. Loan officer sees a dashboard with:
+   - new submitted dossiers
+   - dossier quality categories
+   - status overview
+   - pipeline stages aligned with Pipedrive
+   - where prospects get stuck
+   - daily intake overview
+3. Only dossiers that pass all three gates may appear for loan officer review:
+   - document completeness is sufficient
+   - minimum document correctness is sufficient
+   - minimum AI dossier score is reached
+4. The loan officer opens a dossier and sees:
+   - company/application summary
+   - entrepreneur-facing report
+   - financier-facing credit report
+   - AI verdict
+   - confidence score
+   - reasons for the verdict
+   - document list
+   - missing or recommended additional documents
+   - blocking conditions
+   - non-blocking conditions
+   - underlying uploaded documents
+5. The loan officer can:
+   - approve for partner submission
+   - reject
+   - request additional documents from the entrepreneur
+6. If additional documents are requested:
+   - the app sends an email to the entrepreneur
+   - the prospect dashboard shows requested items
+   - the status updates
+7. If approved:
+   - loan officer selects one or more partner financiers
+   - the agent prepares a complete credit memorandum in the fixed format
+   - the app attaches relevant documents
+   - the loan officer reviews the final package
+   - the loan officer clicks “Aanbieden”
+   - the app sends the dossier package to selected partners or creates a safe mock-send preview
+8. Loan officer/admin can manage partner financiers:
+   - add partner
+   - edit partner
+   - pause partner
+   - set partner product preferences
+   - view performance metrics
+
+Required AI workflow:
+Build the AI workflow as a staged backend pipeline:
+
+Stage 1 — Intake normalization
+Normalize prospect input into one internal case object.
+
+Stage 2 — Document completeness check
+Check whether required documents are present based on financing type, company type, and available information.
+
+Stage 3 — Minimum correctness check
+Check whether documents are readable, relevant, not empty, likely belong to the applicant, and contain usable financial data.
+
+Stage 4 — Data extraction and consolidation
+Extract and consolidate:
+- annual figures
+- interim figures
+- bank transactions
+- forecasts
+- debtor/creditor information if present
+- financing need
+- cash flow capacity
+- collateral/security information
+- repayment capacity indicators
+
+Stage 5 — Financial analysis
+Call the available financial skills through the backend adapter layer.
+
+Stage 6 — Scoring and gating
+Generate:
+- completeness score
+- correctness score
+- financial viability score
+- confidence score
+- blocking conditions
+- non-blocking conditions
+- final AI verdict
+
+Stage 7 — Reports
+Generate two report views from the same underlying analysis:
+1. entrepreneur report: understandable, practical, motivating
+2. financier report: structured, credit-oriented, suitable for loan officer review
+
+Stage 8 — Partner submission package
+Generate:
+- final credit memorandum
+- required attachments list
+- partner-specific submission notes
+- email/package draft for selected partners
+
+Required backend architecture:
+Create modular backend services:
+- AuthService
+- DossierService
+- DocumentService
+- SkillOrchestrationService
+- PipedriveService
+- SendGridEmailService
+- PartnerSubmissionService
+- ReportingService
+- ActivityLogService
+
+Create this AI orchestration structure:
+
+SkillOrchestrationService
+- runPreValidation(dossierId)
+- runDocumentCompletenessCheck(dossierId)
+- runMinimumCorrectnessCheck(dossierId)
+- runFinancialAnalysis(dossierId)
+- runEntrepreneurReportGeneration(dossierId)
+- runFinancierReportGeneration(dossierId)
+- runCreditMemorandumGeneration(dossierId)
+- runPartnerSubmissionPreparation(dossierId, partnerIds)
+
+Create one adapter per available financial skill:
+- CreditProductAdvisorAdapter
+- FinancingNeedAssessorAdapter
+- FinancingProductAdvisorDualViewAdapter
+- GeenbankKredietworkflowAdapter
+- MoneycareKredietmemorandumAdapter
+
+Each adapter must define:
+- expected input schema
+- expected output schema
+- status handling
+- error handling
+- mock fallback
+- logging
+- storage of results
+
+Rules:
+- Do not bury skill calls inside frontend components.
+- Skill usage must be backend-controlled, auditable, replaceable, and traceable.
+- Store every skill input and output in AIAnalysisRun or related tables.
+- New skills must be addable later without rewriting the full application flow.
+- Clearly label which parts are real skill calls and which parts are mocked.
+
+Blocking conditions:
+The app must block full AI evaluation and loan officer submission when:
+- required documents are missing
+- files are unreadable or invalid
+- core company identity cannot be matched
+- essential financial data cannot be extracted
+- the case lacks enough information to produce a reliable assessment
+- the AI confidence score is below the defined minimum
+- the overall dossier score is below the defined minimum
+
+Non-blocking conditions:
+The app may allow progression but must flag:
+- missing optional supporting documents
+- limited forecast substantiation
+- weak explanation of financing purpose
+- incomplete collateral information
+- limited management information
+- older annual figures
+- unclear repayment assumptions
+
+Required integrations:
+1. Pipedrive
+- Receive or fetch new disqualified deals from pipeline “Geenbank | Banking Hub”.
+- Store the Pipedrive deal ID.
+- Sync relevant status changes back to Pipedrive.
+- Show pipeline status in admin dashboard.
+- Track where prospects get stuck.
+- If API key is missing, use mock mode and log what would have happened.
+
+2. SendGrid
+- Send login email to prospect.
+- Send password/reset or access email.
+- Send missing document request.
+- Send status updates.
+- Send daily loan officer summary at the end of each workday.
+- If API key is missing, use mock mode and log the email payload.
+
+3. File uploads
+- Allow upload of financial documents.
+- Store files securely.
+- Track file type, upload date, validation status, and whether used in analysis.
+- Support at least PDF, XLSX, CSV, DOCX, PNG/JPG in the first build.
+- Do not expose files to other users.
+
+Authentication and roles:
+Implement secure authentication with at least:
+- prospect
+- loan_officer
+- admin
+
+Prospect access:
+- email + generated temporary password
+- force password change on first login if feasible
+- prospect can only access their own dossier
+
+Loan officer/admin access:
+- fixed admin login for first build is acceptable
+- structure it so multiple internal users can be added later
+- loan officer can only access dossiers that passed the required gates
+- admin can manage partner financiers and settings
+
+Database schema:
+Design a production-minded database schema. Include at least these entities and fields:
+
+User
+- id
+- email
+- password_hash or auth provider id
+- role
+- created_at
+- last_login_at
+- first_login_completed
+- status
+
+ProspectProfile
+- id
+- user_id
+- company_name
+- contact_name
+- kvk_number
+- phone
+- source
+- pipedrive_deal_id
+- created_at
+
+Application / Dossier
+- id
+- prospect_id
+- status
+- financing_purpose
+- requested_amount
+- financing_type_preference
+- company_description
+- submitted_at
+- current_stage
+- completeness_score
+- correctness_score
+- viability_score
+- confidence_score
+- ai_verdict
+- loan_officer_decision
+- loan_officer_notes
+
+Document
+- id
+- dossier_id
+- uploaded_by
+- document_type
+- filename
+- storage_url_or_path
+- mime_type
+- upload_status
+- validation_status
+- extracted_data_status
+- used_in_analysis
+- created_at
+
+AIAnalysisRun
+- id
+- dossier_id
+- status
+- started_at
+- completed_at
+- skill_modules_used
+- normalized_case_json
+- extracted_financials_json
+- entrepreneur_report
+- financier_report
+- verdict_json
+- errors
+- confidence_score
+
+Condition
+- id
+- dossier_id
+- type: blocking or non_blocking
+- title
+- description
+- required_action
+- status
+
+PartnerFinancier
+- id
+- name
+- contact_email
+- product_focus
+- minimum_ticket_size
+- maximum_ticket_size
+- active_status
+- notes
+- created_at
+
+PartnerSubmission
+- id
+- dossier_id
+- partner_id
+- status
+- submitted_at
+- package_summary
+- response_status
+- response_notes
+
+ActivityLog
+- id
+- dossier_id
+- actor_type
+- actor_id
+- action
+- metadata_json
+- created_at
+
+Status model:
+Use clear statuses such as:
+- lead_created
+- account_invited
+- prospect_logged_in
+- intake_in_progress
+- documents_uploaded
+- pre_validation_running
+- blocked_missing_documents
+- blocked_invalid_documents
+- ready_for_ai_analysis
+- ai_analysis_running
+- entrepreneur_report_ready
+- submitted_to_geenbank
+- loan_officer_review
+- additional_info_requested
+- approved_for_partner_submission
+- rejected_by_loan_officer
+- memorandum_generated
+- submitted_to_partners
+- partner_response_received
+- closed
+
+Prospect UI pages:
+- Login page
+- First login / password setup page if feasible
+- Personal dashboard
+- Application intake flow
+- Document upload page
+- Validation result page
+- Improvement/action list page
+- Entrepreneur report page
+- Submit-to-Geenbank confirmation page
+- Status tracking page
+
+Loan officer/admin UI pages:
+- Admin login
+- Dashboard
+- Qualified dossier list
+- Dossier detail page
+- Financier report view
+- Uploaded documents view
+- Conditions and recommendations view
+- Decision panel: approve / reject / request additional info
+- Partner selection page
+- Credit memorandum review page
+- Partner submission status page
+- Partner management page
+- Metrics dashboard
+
+UX/UI design direction:
+The Geenbank Hub must feel like a modern, premium, slightly edgy, founder-friendly financing cockpit.
+
+Design principles:
+- premium, modern, distinctive, on-brand for Geenbank
+- not a generic SaaS dashboard
+- not a boring banking portal
+- not a plain multi-step form
+- strong typography
+- confident spacing
+- clear contrast
+- polished cards
+- status modules
+- progress components
+- deliberate visual hierarchy
+- interaction feedback only where it improves clarity
+
+Prospect side:
+Energetic, motivational, clear, founder-friendly.
+The entrepreneur should feel they are building a stronger financing case for their own business, not uploading documents for a bank.
+
+Use copy like:
+“Hoe completer je cijfers, hoe sterker wij kunnen onderbouwen waarom jouw bedrijf financierbaar is. Upload hier de stukken waarmee we je aanvraag serieus kunnen beoordelen.”
+
+Loan officer side:
+Calmer, denser, structured, decision-oriented.
+
+Each main screen must include:
+- clear page purpose
+- clear primary action
+- clear secondary actions
+- status feedback
+- meaningful empty state
+- loading state
+- error state
+- success state
+- mobile responsiveness where relevant
+- polished visual styling
+
+Required reusable UI components:
+- status badges
+- score cards
+- document cards
+- progress path
+- next-best-action panel
+- report sections
+- condition cards
+- decision panel
+- partner cards
+- upload dropzone
+- loading skeletons
+- blocked-state panel
+- success confirmation panel
+
+Security and privacy:
+- Never expose API keys client-side.
+- Use environment variables for Pipedrive, SendGrid, AI/skill endpoints and storage credentials.
+- Enforce role-based access control on every protected page and API route.
+- Validate all user input server-side.
+- Validate file type and file size.
+- Prevent one prospect from accessing another prospect’s dossier or documents.
+- Log important actions in ActivityLog.
+- Do not send sensitive financial data to the frontend unless needed for the active user’s role.
+- Keep AI reports tied to immutable analysis runs, so results are traceable.
+
+First-build vertical slice:
+Implement a working vertical slice covering the main flows:
+
+- Authentication works.
+- Prospect can receive/access account manually or via mocked SendGrid if no API key exists.
+- Prospect can complete application and upload documents.
+- AI pre-validation workflow exists and can block or allow progress.
+- AI analysis workflow exists through skill adapters.
+- Entrepreneur report is generated and displayed.
+- Prospect can submit to Geenbank.
+- Loan officer dashboard only shows eligible dossiers.
+- Loan officer can view financier report and documents.
+- Loan officer can approve/reject/request additional information.
+- Partner financiers can be managed.
+- Loan officer can select partners.
+- Memorandum generation flow exists through the moneycare-kredietmemorandum-fabriek adapter.
+- Partner submission flow exists; if live sending is unavailable, create a safe mock/send-preview mode.
+- Pipedrive and SendGrid are integrated through service layers and can run in mock mode if credentials are missing.
+- Seed/demo data exists so the app can be tested without live integrations.
+- Core buttons must not be non-functional placeholders. If an external integration is unavailable, implement mock mode that clearly logs what would have happened.
+
+Quality requirements:
+- Keep business rules centralized, not scattered across UI components.
+- Use typed schemas for important backend input/output boundaries.
+- Include clear error handling.
+- Include manual test instructions.
+- Add a README with setup, environment variables, seed/demo accounts, and run instructions.
+- Add enough seed data to test both prospect and loan officer flows.
+- Do not mark the build complete if the app merely works functionally but feels visually generic or confusing.
+
+Acceptance criteria:
+
+Prospect flow:
+- A prospect can log in.
+- A prospect can complete a financing application.
+- A prospect can upload documents.
+- A prospect can see validation results.
+- A blocked prospect cannot trigger full AI analysis.
+- A valid prospect can trigger AI analysis.
+- A valid prospect receives a clear entrepreneur-facing report.
+- A valid prospect can submit the dossier to Geenbank.
+- A prospect can only see their own dossier.
+
+Loan officer flow:
+- Loan officer can log in separately.
+- Loan officer dashboard only shows dossiers that passed the required gates and were submitted by the entrepreneur.
+- Loan officer can open a dossier and view financier-facing report, scores, conditions, documents, and AI verdict.
+- Loan officer can approve, reject, or request additional information.
+- Loan officer can select partner financiers after approval.
+- Loan officer can generate or preview a credit memorandum.
+- Loan officer can send or mock-send the partner submission package.
+
+AI workflow:
+- The app has a clear staged AI pipeline.
+- The existing financial skills are called through backend adapters or mocked through realistic typed interfaces.
+- Blocking and non-blocking conditions are visible and stored.
+- AI outputs are saved as analysis runs.
+- Reports are generated from stored analysis data, not temporary frontend state.
+
+Integrations:
+- Pipedrive service layer exists and stores Pipedrive deal IDs.
+- SendGrid service layer exists and sends or mock-sends required emails.
+- Missing API keys do not crash the app; mock mode is clearly reported.
+
+Design, UX, and visual excellence:
+- The first build has a premium, distinctive visual direction.
+- The app does not look like a generic admin template or plain CRUD app.
+- The prospect flow guides, motivates, and explains.
+- The loan officer flow supports fast, structured decision-making.
+- Every main screen has a clear primary action and status.
+- Empty, loading, blocked, warning, success, and error states are implemented.
+- Reports are readable, well-structured, and visually credible.
+
+Skill readiness:
+- The backend contains a Skill Orchestration Service.
+- The app has adapters for all specified custom financial skills.
+- The app is prepared to use standard Replit skills/tools/capabilities where useful.
+- Skill calls are server-side, traceable, and stored.
+- Mock responses are only used where real skill interfaces are unavailable.
+- New skills can be added later without rewriting the full application.
+
+Security:
+- Secrets are stored in environment variables.
+- Role-based access control is enforced.
+- Uploaded documents are not publicly accessible.
+- Server-side validation exists for forms and uploads.
+
+After implementation:
+Run the app, test the main flows, fix errors, and report:
+1. chosen stack and why
+2. what was built
+3. which integrations are live and which are mocked
+4. environment variables required
+5. how to run locally
+6. seed/demo accounts
+7. exact manual test steps
+8. known limitations
+9. recommended next implementation step

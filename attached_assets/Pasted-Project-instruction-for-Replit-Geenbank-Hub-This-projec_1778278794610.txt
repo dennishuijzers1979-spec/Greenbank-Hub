@@ -1,0 +1,139 @@
+Project instruction for Replit — Geenbank Hub
+
+This project is a production-minded financing application hub called “Geenbank Hub”.
+
+Always optimize for a working, maintainable, premium-feeling vertical slice before adding advanced features.
+
+The app must feel like a modern, premium, slightly edgy, founder-friendly financing cockpit. It must not look like a generic CRUD dashboard, generic SaaS template, CRM skin, or boring banking portal.
+
+UI language is Dutch, Netherlands Dutch.
+
+Tone:
+- prospect side: clear, entrepreneurial, reassuring, direct, motivating, practical
+- loan officer/admin side: structured, professional, financier-oriented, credit-oriented
+
+The product has two primary user groups:
+1. prospect / entrepreneur
+2. loan officer / admin
+
+Keep the experience split clearly:
+- prospect side must guide the entrepreneur toward a stronger financing case
+- loan officer side must support fast, structured dossier review and partner submission
+
+Do not rebuild financial AI logic from scratch. Treat these as existing callable skills or project-available custom capabilities:
+- credit-product-advisor
+- financing-need-assessor
+- financing-product-advisor-dual-view
+- geenbank-kredietworkflow
+- moneycare-kredietmemorandum-fabriek
+
+All skill calls must be server-side only.
+
+Maintain this architecture:
+- SkillOrchestrationService controls the AI pipeline
+- one adapter per skill
+- typed input and output schemas
+- mock fallback when exact invocation interface or secrets are unavailable
+- every skill input and output stored in AIAnalysisRun or related tables
+- skill calls logged, traceable, repeatable, and auditable
+- frontend never calls skills directly
+
+Required skill adapters:
+- CreditProductAdvisorAdapter
+- FinancingNeedAssessorAdapter
+- FinancingProductAdvisorDualViewAdapter
+- GeenbankKredietworkflowAdapter
+- MoneycareKredietmemorandumAdapter
+
+Required backend services:
+- AuthService
+- DossierService
+- DocumentService
+- SkillOrchestrationService
+- PipedriveService
+- SendGridEmailService
+- PartnerSubmissionService
+- ReportingService
+- ActivityLogService
+
+Centralize business rules. Do not scatter status transitions, gating logic, role checks, or AI readiness checks across UI components.
+
+Use role-based access control everywhere:
+- prospect can only access their own dossier and documents
+- loan officer can only see qualified submitted dossiers
+- admin can manage settings and partner financiers
+
+Never expose secrets or API keys client-side. Use environment variables for Pipedrive, SendGrid, AI/skill endpoints, storage credentials, auth secrets, and deployment-specific config.
+
+Uploaded documents must not be public. Validate file type, file size, ownership, and access permissions server-side.
+
+Supported first-build document types:
+- PDF
+- XLSX
+- CSV
+- DOCX
+- PNG
+- JPG/JPEG
+
+The AI pipeline must remain staged:
+1. intake normalization
+2. document completeness check
+3. minimum correctness check
+4. data extraction and consolidation
+5. financial analysis through skill adapters
+6. scoring and gating
+7. entrepreneur and financier reports
+8. partner submission package
+
+Blocking conditions must prevent full AI analysis and loan officer submission when:
+- required documents are missing
+- files are unreadable or invalid
+- company identity cannot be matched
+- essential financial data cannot be extracted
+- there is not enough information for reliable assessment
+- confidence score is below minimum
+- overall dossier score is below minimum
+
+Non-blocking conditions may allow progression but must be clearly flagged.
+
+All major user actions must create ActivityLog records.
+
+Reports must be generated from stored analysis data, not temporary frontend state.
+
+Use realistic seed/demo data for local testing, including:
+- at least one incomplete prospect dossier
+- at least one blocked prospect dossier
+- at least one ready-for-analysis dossier
+- at least one submitted eligible loan officer dossier
+- at least two partner financiers
+- at least one mock AI analysis run
+
+Every main screen must include:
+- clear page purpose
+- clear primary action
+- clear secondary actions where useful
+- status feedback
+- empty state
+- loading state
+- error state
+- success state
+- responsive layout
+- polished visual styling
+
+Prospect screens must explain why each step matters for financing quality. Avoid dry upload/form copy.
+
+Loan officer screens must prioritize scan speed, decision quality, score visibility, conditions, documents, and next action.
+
+Do not leave primary buttons as dead placeholders. If a live external integration is unavailable, implement a mock mode that logs the exact intended action and shows a safe preview to the user.
+
+When changing existing code:
+- inspect the current structure first
+- preserve working functionality
+- avoid unnecessary rewrites
+- keep code modular, typed, readable, and easy to extend
+- update README and test instructions when behavior changes
+
+After every implementation step:
+- run or reason through relevant checks
+- verify core user flows
+- report what was changed, what was verified, what remains mocked, and what risks remain
