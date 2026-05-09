@@ -130,6 +130,11 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Dossier" }
+        "409":
+          description: Submission blocked by the central dossier gate
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GateBlockedError" }
 
   /dossiers:
     get:
@@ -301,6 +306,11 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/AIAnalysisRun" }
+        "409":
+          description: Analysis blocked by the central dossier gate
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GateBlockedError" }
 
   /dossiers/{dossierId}/runs:
     get:
@@ -591,6 +601,64 @@ components:
       properties:
         ok: { type: boolean }
       required: [ok]
+
+    GateScores:
+      type: object
+      properties:
+        completeness: { type: number }
+        correctness: { type: number }
+        confidence: { type: number }
+        viability: { type: number }
+      required: [completeness, correctness, confidence, viability]
+
+    GateThresholds:
+      type: object
+      properties:
+        completeness: { type: number }
+        correctness: { type: number }
+        confidence: { type: number }
+        viability: { type: number }
+      required: [completeness, correctness, confidence, viability]
+
+    GateBlockedError:
+      description: |
+        Structured payload returned by endpoints guarded by the central
+        dossier gate (`checkRunAnalysisGate`). Used by both
+        `/dossiers/me/run-analysis` and `/dossiers/me/submit` so the
+        frontend can render the same blocking UI for both flows.
+      type: object
+      properties:
+        error: { type: string }
+        message: { type: string }
+        reasons:
+          type: array
+          items: { type: string }
+        actions:
+          type: array
+          items: { type: string }
+        missingDocuments:
+          type: array
+          items: { type: string }
+        invalidDocuments:
+          type: array
+          items: { type: string }
+        pendingDocuments:
+          type: array
+          items: { type: string }
+        blockingConditions: { type: integer }
+        scores: { $ref: "#/components/schemas/GateScores" }
+        thresholds: { $ref: "#/components/schemas/GateThresholds" }
+      required:
+        - error
+        - message
+        - reasons
+        - actions
+        - missingDocuments
+        - invalidDocuments
+        - pendingDocuments
+        - blockingConditions
+        - scores
+        - thresholds
 
     Role:
       type: string

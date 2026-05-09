@@ -13,6 +13,40 @@ export interface Ok {
   ok: boolean;
 }
 
+export interface GateScores {
+  completeness: number;
+  correctness: number;
+  confidence: number;
+  viability: number;
+}
+
+export interface GateThresholds {
+  completeness: number;
+  correctness: number;
+  confidence: number;
+  viability: number;
+}
+
+/**
+ * Structured payload returned by endpoints guarded by the central
+dossier gate (`checkRunAnalysisGate`). Used by both
+`/dossiers/me/run-analysis` and `/dossiers/me/submit` so the
+frontend can render the same blocking UI for both flows.
+
+ */
+export interface GateBlockedError {
+  error: string;
+  message: string;
+  reasons: string[];
+  actions: string[];
+  missingDocuments: string[];
+  invalidDocuments: string[];
+  pendingDocuments: string[];
+  blockingConditions: number;
+  scores: GateScores;
+  thresholds: GateThresholds;
+}
+
 export type Role = (typeof Role)[keyof typeof Role];
 
 export const Role = {
