@@ -350,6 +350,32 @@ test("gate blocks when confidence score is below threshold", async () => {
   assert.ok(gate.reasons.some((r) => /Vertrouwens/i.test(r)));
 });
 
+test("gate blocks when completeness score is below threshold", async () => {
+  const ctx = await createProspectWithDossier();
+  await insertAllRequiredValidDocs(ctx.dossierId, ctx.userId);
+  await insertRun(ctx.dossierId, {
+    ...PASSING_SCORES,
+    completeness: GATE_THRESHOLDS.completeness - 10,
+  });
+  const gate = await checkRunAnalysisGate(ctx.dossierId);
+  assert.equal(gate.ok, false);
+  if (gate.ok) return;
+  assert.ok(gate.reasons.some((r) => /Compleetheidsscore/i.test(r)));
+});
+
+test("gate blocks when correctness score is below threshold", async () => {
+  const ctx = await createProspectWithDossier();
+  await insertAllRequiredValidDocs(ctx.dossierId, ctx.userId);
+  await insertRun(ctx.dossierId, {
+    ...PASSING_SCORES,
+    correctness: GATE_THRESHOLDS.correctness - 10,
+  });
+  const gate = await checkRunAnalysisGate(ctx.dossierId);
+  assert.equal(gate.ok, false);
+  if (gate.ok) return;
+  assert.ok(gate.reasons.some((r) => /Correctheidsscore/i.test(r)));
+});
+
 test("gate blocks when viability score is below threshold", async () => {
   const ctx = await createProspectWithDossier();
   await insertAllRequiredValidDocs(ctx.dossierId, ctx.userId);
