@@ -186,6 +186,35 @@ export function describeAiRuntime(modules: readonly SkillModule[]): RuntimeStatu
   };
 }
 
+/**
+ * Defensive, generic secret scrubber applied to every persisted
+ * `SkillInvocation` (notably `extras`, `inputSummary`, `outputSummary`,
+ * and `errorMessage`). Adapters are still expected to scrub at their
+ * own level — this is a secondary safety net so a future adapter that
+ * forgets cannot leak `sk-…` style keys, bearer tokens, or `api_key`
+ * fields into the DB or the UI.
+ */
+const SECRET_KEY_FIELD_RE = /^(api[_-]?key|authorization|bearer|access[_-]?token|client[_-]?secret)$/i;
+const SECRET_STRING_RE = /sk-[A-Za-z0-9_-]{10,}/g;
+
+export function scrubSecrets<T>(value: T): T {
+  if (typeof value === "string") {
+    return value.replace(SECRET_STRING_RE, "sk-***") as unknown as T;
+  }
+  if (Array.isArray(value)) {
+    return value.map((v) => scrubSecrets(v)) as unknown as T;
+  }
+  if (value && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      if (SECRET_KEY_FIELD_RE.test(k)) continue;
+      out[k] = scrubSecrets(v);
+    }
+    return out as unknown as T;
+  }
+  return value;
+}
+
 /** Truncate long strings for safe persistence/log. */
 export function summarize(value: unknown, max = 240): string {
   let s: string;
@@ -331,7 +360,7 @@ function buildInvocation(args: {
     skillName: args.cfg.module,
     provider: args.cfg.provider,
     usedMockMode,
-    fallbackReason,
+    fallbackReason: fallbackReason ? scrubSecrets(fallbackReason) : null,
     model: usedMockMode && args.modelOverride === undefined ? null : model,
     endpoint: args.cfg.endpoint,
     assistantId: args.cfg.assistantId,
@@ -339,10 +368,10 @@ function buildInvocation(args: {
     completedAt: completedAt.toISOString(),
     durationMs: completedAt.getTime() - args.startedAt.getTime(),
     ok: args.ok,
-    inputSummary: summarize(args.inputSummary),
-    outputSummary: summarize(args.outputSummary),
-    errorMessage: args.errorMessage,
-    extras: args.extras ?? null,
+    inputSummary: scrubSecrets(summarize(args.inputSummary)),
+    outputSummary: scrubSecrets(summarize(args.outputSummary)),
+    errorMessage: args.errorMessage ? scrubSecrets(args.errorMessage) : null,
+    extras: args.extras ? scrubSecrets(args.extras) : null,
   };
 }
 
