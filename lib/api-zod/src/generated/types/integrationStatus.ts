@@ -5,9 +5,11 @@
  * Geenbank Hub API
  * OpenAPI spec version: 0.1.0
  */
+import type { AISkillsRuntime } from "./aISkillsRuntime";
 
 export interface IntegrationStatus {
   name: string;
   live: boolean;
   message: string;
+  runtime?: AISkillsRuntime;
 }

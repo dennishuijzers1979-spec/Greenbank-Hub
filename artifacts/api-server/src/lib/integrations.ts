@@ -1,4 +1,6 @@
 import { logger } from "./logger";
+import { describeAiRuntime, type RuntimeStatus } from "./skills/runtime";
+import { SKILL_MODULES } from "./skills/types";
 
 export function pipedriveStatus() {
   const live = Boolean(process.env.PIPEDRIVE_API_TOKEN);
@@ -22,19 +24,20 @@ export function sendgridStatus() {
   };
 }
 
-export function aiSkillsStatus() {
-  const live = Boolean(
-    process.env.ANTHROPIC_API_KEY ||
-      process.env.OPENAI_API_KEY ||
-      process.env.AI_API_KEY,
-  );
-  return {
-    name: "AI Skills",
-    live,
-    message: live
-      ? "AI-pijplijn gebruikt live taalmodel."
-      : "AI-pijplijn draait deterministisch in mock-modus.",
-  };
+export type AISkillsStatus = {
+  name: string;
+  live: boolean;
+  message: string;
+  runtime: RuntimeStatus;
+};
+
+export function aiSkillsStatus(): AISkillsStatus {
+  const runtime = describeAiRuntime(SKILL_MODULES);
+  const live = runtime.liveSkills > 0;
+  const message = live
+    ? `AI-pijplijn: ${runtime.liveSkills}/${runtime.totalSkills} skills live via ${runtime.defaultProvider}.`
+    : "AI-pijplijn draait deterministisch in mock-modus.";
+  return { name: "AI Skills", live, message, runtime };
 }
 
 export function objectStorageStatus() {
@@ -58,7 +61,6 @@ export async function notifyPipedriveDealUpdate(opts: {
     logger.info({ pipedrive: "mock", ...opts }, "Pipedrive update (mock)");
     return { delivered: false };
   }
-  // Real Pipedrive call would go here.
   logger.info({ pipedrive: "live", ...opts }, "Pipedrive update");
   return { delivered: true };
 }

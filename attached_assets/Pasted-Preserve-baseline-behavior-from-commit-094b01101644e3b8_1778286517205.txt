@@ -1,0 +1,189 @@
+Preserve baseline behavior from commit 094b01101644e3b8774a5588a53f522b6575d165.
+
+Do not regress:
+- gate tests
+- typed 409 payloads
+- upload gating
+- AI analysis gating
+- submit gating
+- officer visibility
+- RBAC
+- document download permissions
+- Dutch UI language
+- server-side-only skill invocation
+- mock fallback behavior for unavailable integrations
+
+Before changing code:
+- inspect the current structure first
+- avoid rewrites
+- keep business rules centralized
+- keep frontend free of direct AI/skill calls
+
+After changing code:
+- run the relevant tests
+- run typecheck
+- run build
+- report changed files, checks, known mocks, and remaining risks
+
+Task: Add AI skill invocation observability to Geenbank Hub.
+
+Problem:
+The project owner has useful skills in ChatGPT/OpenAI/Replit context, but it is currently unclear whether the Geenbank Hub backend calls real skills, calls OpenAI/Anthropic, calls HTTP endpoints, or only uses deterministic mocks.
+
+Goal:
+Make AI skill usage explicit, auditable, and visible in admin/loan officer tooling before wiring real skills.
+
+1. Add central AI skill runtime config
+
+Create a central server-side AI runtime config/helper that determines:
+- selected provider
+- whether real invocation is possible
+- whether mock mode is used
+- why mock mode is used
+- configured model, endpoint, or assistant id
+- missing environment variables
+
+Support provider-neutral config such as:
+
+AI_SKILL_PROVIDER=mock|openai|http|replit
+OPENAI_API_KEY
+OPENAI_MODEL
+ANTHROPIC_API_KEY
+ANTHROPIC_MODEL
+SKILL_CREDIT_PRODUCT_ADVISOR_ENDPOINT
+SKILL_FINANCING_NEED_ASSESSOR_ENDPOINT
+SKILL_FINANCING_PRODUCT_ADVISOR_DUAL_VIEW_ENDPOINT
+SKILL_GEENBANK_KREDIETWORKFLOW_ENDPOINT
+SKILL_MONEYCARE_KREDIETMEMORANDUM_ENDPOINT
+SKILL_CREDIT_PRODUCT_ADVISOR_ASSISTANT_ID
+SKILL_FINANCING_NEED_ASSESSOR_ASSISTANT_ID
+SKILL_FINANCING_PRODUCT_ADVISOR_DUAL_VIEW_ASSISTANT_ID
+SKILL_GEENBANK_KREDIETWORKFLOW_ASSISTANT_ID
+SKILL_MONEYCARE_KREDIETMEMORANDUM_ASSISTANT_ID
+
+Do not hard-code Anthropic as the only live provider.
+Default safely to mock mode when no real provider is configured.
+
+2. Add consistent invocation metadata
+
+Every skill adapter call must produce consistent metadata:
+- skillName
+- provider
+- usedMockMode
+- model
+- endpoint or assistant id, without secrets
+- startedAt
+- completedAt
+- durationMs
+- inputSummary
+- outputSummary
+- errorMessage
+- fallbackReason
+
+Do not store API keys or secrets.
+
+3. Store metadata with analysis runs
+
+Attach the per-skill invocation metadata to AIAnalysisRun or a related structured field.
+If the existing schema already has a suitable JSON field, use it.
+If not, add the smallest compatible schema change.
+
+Every analysis run should show:
+- which skill adapters ran
+- which were mock vs real
+- why a mock fallback was used
+- whether any adapter failed and recovered
+
+4. Update all adapters
+
+Update:
+- CreditProductAdvisorAdapter
+- FinancingNeedAssessorAdapter
+- FinancingProductAdvisorDualViewAdapter
+- GeenbankKredietworkflowAdapter
+- MoneycareKredietmemorandumAdapter
+
+All adapters must use the same runtime config/helper and return consistent metadata.
+
+Do not connect unknown skills blindly.
+If real skill invocation interface is unknown:
+- use provider=mock
+- usedMockMode=true
+- fallbackReason="Real skill invocation interface not configured"
+- document exactly what env var or interface is needed to make the call real
+
+5. Add server-side structured logging
+
+For every skill call, log:
+- dossierId
+- aiAnalysisRunId if available
+- skillName
+- provider
+- mock or real
+- durationMs
+- success or failure
+- fallbackReason
+
+6. Add admin/loan officer visibility
+
+Add a compact “AI uitvoeringsdetails” section to the relevant loan officer/admin analysis or dossier detail view.
+
+Show:
+- skill name
+- provider
+- mock vs real
+- model, endpoint, or assistant id if configured
+- fallback reason if mock was used
+- timestamp/duration
+- errors if any
+
+This visibility is only for internal users, not prospects.
+
+Use Dutch UI copy.
+
+7. Update README/developer notes
+
+Document:
+- how to tell whether AI is mock or real
+- required env vars for mock/openai/http/replit modes
+- where to see skill invocation details in the UI
+- current default behavior
+- what is still needed to connect the real ChatGPT/OpenAI/Replit skills
+
+8. Add or update tests
+
+Add focused tests for:
+- default config uses mock mode
+- missing real provider config falls back to mock with clear fallbackReason
+- invocation metadata is created for every adapter
+- AIAnalysisRun stores or exposes metadata
+- internal UI/API can retrieve invocation details without exposing secrets
+
+Do not make tests depend on real OpenAI/Anthropic/Replit credentials.
+
+9. Run checks
+
+Run:
+pnpm run typecheck
+pnpm run build
+pnpm --filter @workspace/api-server run test
+
+If frontend changes need test coverage, run/add the relevant frontend checks too.
+
+10. Commit and push
+
+Commit with:
+
+Geenbank Hub: add AI skill invocation observability
+
+11. Report back exactly
+
+Report:
+- changed files
+- test output
+- typecheck output
+- build output
+- where the app now shows mock vs real AI usage
+- what remains mocked
+- what is still needed to connect the real ChatGPT/OpenAI/Replit skills
+- known limitations or remaining risks

@@ -20,6 +20,7 @@ import {
   type FinancierReport,
   type Memorandum,
   type SkillContext,
+  type SkillInvocation,
   type SkillModule,
 } from "./skills";
 
@@ -28,6 +29,7 @@ export {
   REQUIRED_DOCUMENT_TYPES,
   SKILL_MODULES,
   type SkillModule,
+  type SkillInvocation,
   type AnalysisOutput,
   type EntrepreneurReport,
   type FinancierReport,
@@ -35,6 +37,7 @@ export {
 } from "./skills";
 
 export { isAiLive } from "./skills/types";
+export { describeAiRuntime, resolveSkillRuntime } from "./skills/runtime";
 
 export type RunAnalysisGateResult =
   | { ok: true }
@@ -234,6 +237,7 @@ class SkillOrchestrationService {
         status: "completed",
         completedAt: new Date(),
         skillModulesUsed: [result.module],
+        skillInvocations: [result.invocation],
         memorandum: result.data,
         usedMockMode: result.usedMockMode,
         errors: result.error ? [result.error] : [],
@@ -275,22 +279,26 @@ class SkillOrchestrationService {
 
   private async analyze(ctx: SkillContext): Promise<AnalysisOutput> {
     const skillModulesUsed: SkillModule[] = [];
+    const skillInvocations: SkillInvocation[] = [];
     const errors: string[] = [];
     let usedMockMode = false;
 
     const need = await FinancingNeedAssessorAdapter.run(ctx);
     skillModulesUsed.push(need.module);
+    skillInvocations.push(need.invocation);
     usedMockMode = usedMockMode || need.usedMockMode;
     if (!need.ok && need.error) errors.push(`${need.module}: ${need.error}`);
 
     const credit = await CreditProductAdvisorAdapter.run(ctx);
     skillModulesUsed.push(credit.module);
+    skillInvocations.push(credit.invocation);
     usedMockMode = usedMockMode || credit.usedMockMode;
     if (!credit.ok && credit.error)
       errors.push(`${credit.module}: ${credit.error}`);
 
     const dual = await FinancingProductAdvisorDualViewAdapter.run(ctx);
     skillModulesUsed.push(dual.module);
+    skillInvocations.push(dual.invocation);
     usedMockMode = usedMockMode || dual.usedMockMode;
     if (!dual.ok && dual.error) errors.push(`${dual.module}: ${dual.error}`);
 
@@ -308,6 +316,7 @@ class SkillOrchestrationService {
       requested: dual.data.requested,
     });
     skillModulesUsed.push(workflow.module);
+    skillInvocations.push(workflow.invocation);
     usedMockMode = usedMockMode || workflow.usedMockMode;
     if (!workflow.ok && workflow.error)
       errors.push(`${workflow.module}: ${workflow.error}`);
@@ -324,6 +333,7 @@ class SkillOrchestrationService {
       weakPoints: workflow.data.weakPoints,
     });
     skillModulesUsed.push(financier.module);
+    skillInvocations.push(financier.invocation);
     usedMockMode = usedMockMode || financier.usedMockMode;
     if (!financier.ok && financier.error)
       errors.push(`${financier.module}: ${financier.error}`);
@@ -338,6 +348,7 @@ class SkillOrchestrationService {
       entrepreneurReport: workflow.data.entrepreneurReport,
       financierReport: financier.data,
       skillModulesUsed,
+      skillInvocations,
       usedMockMode,
       errors,
     };
@@ -355,6 +366,7 @@ class SkillOrchestrationService {
         status: "completed",
         completedAt: new Date(),
         skillModulesUsed: output.skillModulesUsed,
+        skillInvocations: output.skillInvocations,
         completenessScore: output.completenessScore,
         correctnessScore: output.correctnessScore,
         viabilityScore: output.viabilityScore,

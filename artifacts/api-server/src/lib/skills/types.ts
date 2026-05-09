@@ -60,6 +60,7 @@ export type SkillResult<T> = {
   usedMockMode: boolean;
   data: T;
   error?: string;
+  invocation: import("./runtime").SkillInvocation;
 };
 
 export type EntrepreneurReport = {
@@ -92,6 +93,7 @@ export type AnalysisOutput = {
   entrepreneurReport: EntrepreneurReport;
   financierReport: FinancierReport;
   skillModulesUsed: SkillModule[];
+  skillInvocations: import("./runtime").SkillInvocation[];
   usedMockMode: boolean;
   errors: string[];
 };
