@@ -57,13 +57,24 @@ function readProvider(value: string | undefined): SkillProvider | null {
   return VALID_PROVIDERS.has(v as SkillProvider) ? (v as SkillProvider) : null;
 }
 
+/**
+ * Resolve the *global default* provider. Only an explicit
+ * `AI_SKILL_PROVIDER=openai|http|replit` opts every skill into a live
+ * path; the mere presence of `OPENAI_API_KEY` (or any other secret)
+ * does NOT auto-promote skills to live execution. Per-skill opt-in
+ * (`AI_SKILL_<MODULE>_PROVIDER`) remains the only safe way to enable a
+ * single live adapter.
+ *
+ * Rationale: of the five adapters, only
+ * `FinancingProductAdvisorDualView` has a real OpenAI implementation.
+ * Auto-promoting the other four to `provider=openai` made the AI
+ * uitvoeringsdetails panel and the admin Integraties card claim "live"
+ * for skills that still ran deterministic mock code. The default now
+ * stays honest: `mock`, unless an operator explicitly opts in.
+ */
 function detectGlobalProvider(): SkillProvider {
   const explicit = readProvider(process.env.AI_SKILL_PROVIDER);
   if (explicit) return explicit;
-  if (process.env.OPENAI_API_KEY) return "openai";
-  if (process.env.ANTHROPIC_API_KEY) return "replit";
-  if (process.env.AI_SKILL_ENDPOINT) return "http";
-  if (process.env.AI_API_KEY) return "replit";
   return "mock";
 }
 

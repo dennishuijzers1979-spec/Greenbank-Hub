@@ -119,6 +119,16 @@ The partner view must remain practical and structured. Include:
   - `evidence_strength_score`
   - `structurability_score`
 
+## Language directive
+All free-text fields in both views — `summary`, `strengths[]`, `weaknesses[]`,
+`rationale[]`, `key_risks[]`, `evidence_gaps[]`, `todo_minimum[]`,
+`todo_optimal[]`, `notes[]`, `repayment_logic`, `collateral_logic`, and any
+narrative chat output — MUST be written in clear Dutch (NL-NL). Do not
+translate the enum values: `cta_status`, `recommendation_status`, and
+`product_name` stay in their controlled English form so the adapter and the
+central gate can match them. Currency notation should follow Dutch
+convention (`€ 200.000`).
+
 ## Output requirements
 ### Chat output
 Default structure:
