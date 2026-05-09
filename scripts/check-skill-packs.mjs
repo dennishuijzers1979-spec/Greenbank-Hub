@@ -42,6 +42,59 @@ for (const name of REQUIRED_SKILLS) {
   }
 }
 
+// Per-skill checks for imported skill packs (real ChatGPT Vaardigheden archives)
+// that have been pulled into the repo and need an adapter mapping documented.
+const IMPORTED_SKILLS = [
+  {
+    name: "financing-product-advisor-dual-view",
+    requiredFiles: [
+      "SKILL.md",
+      "agents/openai.yaml",
+      "references/api_reference.md",
+      "references/output-notes.md",
+    ],
+    requiredOutputKeys: ["entrepreneur_view", "partner_view"],
+    requiredMappingMarkers: [
+      "Repo integration notes",
+      "Output mapping",
+      "viabilityScore",
+    ],
+  },
+];
+
+for (const skill of IMPORTED_SKILLS) {
+  const dir = join(SKILLS_DIR, skill.name);
+  for (const rel of skill.requiredFiles) {
+    try {
+      statSync(join(dir, rel));
+    } catch {
+      errors.push(`missing file: skills/${skill.name}/${rel}`);
+    }
+  }
+  let md = "";
+  try {
+    md = readFileSync(join(dir, "SKILL.md"), "utf8");
+  } catch {
+    /* already reported above */
+  }
+  if (md) {
+    for (const key of skill.requiredOutputKeys) {
+      if (!md.includes(key)) {
+        errors.push(
+          `skills/${skill.name}/SKILL.md is missing output JSON key "${key}"`,
+        );
+      }
+    }
+    for (const marker of skill.requiredMappingMarkers) {
+      if (!md.includes(marker)) {
+        errors.push(
+          `skills/${skill.name}/SKILL.md is missing mapping marker "${marker}"`,
+        );
+      }
+    }
+  }
+}
+
 const SECRET_PATTERNS = [
   /OPENAI_API_KEY\s*=\s*\S+/i,
   /ANTHROPIC_API_KEY\s*=\s*\S+/i,
