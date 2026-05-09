@@ -29,6 +29,15 @@ export type SkillInvocation = {
   inputSummary: string;
   outputSummary: string;
   errorMessage: string | null;
+  /**
+   * Optional structured payload that adapters can attach when they
+   * have richer data than fits in `outputSummary` (e.g. the full
+   * dual-view skill JSON). Persisted as JSONB on
+   * `ai_analysis_runs.skill_invocations` and surfaced in the
+   * *AI uitvoeringsdetails* panel. Adapters MUST scrub secrets
+   * before attaching anything here.
+   */
+  extras?: Record<string, unknown> | null;
 };
 
 const VALID_PROVIDERS: ReadonlySet<SkillProvider> = new Set([
@@ -183,11 +192,28 @@ export function summarize(value: unknown, max = 240): string {
  * record alongside the adapter's output. Uses the runtime resolver so
  * the adapter does not have to know how to interpret env vars.
  */
+/**
+ * Optional overrides an adapter callback can return so the recorded
+ * `SkillInvocation` reflects what actually happened, not just what was
+ * requested. Used by the dual-view adapter when a live OpenAI call is
+ * attempted and falls back to deterministic mock output mid-flight.
+ */
+export type SkillCallbackResult<T> = {
+  data: T;
+  outputSummary: string;
+  ok?: boolean;
+  error?: string | null;
+  usedMockMode?: boolean;
+  fallbackReason?: string | null;
+  model?: string | null;
+  extras?: Record<string, unknown> | null;
+};
+
 export async function instrumentSkill<T>(
   module: SkillModule,
   ctx: { dossier: { id: string } },
   inputSummary: string,
-  fn: (cfg: SkillRuntimeConfig) => Promise<{ data: T; outputSummary: string; ok?: boolean; error?: string | null }>,
+  fn: (cfg: SkillRuntimeConfig) => Promise<SkillCallbackResult<T>>,
 ): Promise<{ data: T; invocation: SkillInvocation; ok: boolean; error: string | null; usedMockMode: boolean }> {
   const cfg = resolveSkillRuntime(module);
   const startedAt = new Date();
@@ -208,12 +234,20 @@ export async function instrumentSkill<T>(
   let outputSummary = "";
   let ok = true;
   let errorMessage: string | null = null;
+  let usedMockOverride: boolean | undefined;
+  let fallbackOverride: string | null | undefined;
+  let modelOverride: string | null | undefined;
+  let extras: Record<string, unknown> | null | undefined;
   try {
     const r = await fn(cfg);
     data = r.data;
     outputSummary = r.outputSummary;
     ok = r.ok ?? true;
     errorMessage = r.error ?? null;
+    usedMockOverride = r.usedMockMode;
+    fallbackOverride = r.fallbackReason;
+    modelOverride = r.model;
+    extras = r.extras;
   } catch (err) {
     ok = false;
     errorMessage = err instanceof Error ? err.message : String(err);
@@ -235,6 +269,10 @@ export async function instrumentSkill<T>(
     inputSummary,
     outputSummary,
     errorMessage,
+    usedMockOverride,
+    fallbackOverride,
+    modelOverride,
+    extras,
   });
   logger.info(
     {
@@ -253,7 +291,7 @@ export async function instrumentSkill<T>(
     invocation,
     ok,
     error: errorMessage,
-    usedMockMode: cfg.usedMockMode,
+    usedMockMode: invocation.usedMockMode,
   };
 }
 
@@ -264,14 +302,26 @@ function buildInvocation(args: {
   inputSummary: string;
   outputSummary: string;
   errorMessage: string | null;
+  usedMockOverride?: boolean;
+  fallbackOverride?: string | null;
+  modelOverride?: string | null;
+  extras?: Record<string, unknown> | null;
 }): SkillInvocation {
   const completedAt = new Date();
+  const usedMockMode =
+    args.usedMockOverride ?? args.cfg.usedMockMode;
+  const fallbackReason =
+    args.fallbackOverride !== undefined
+      ? args.fallbackOverride
+      : args.cfg.fallbackReason;
+  const model =
+    args.modelOverride !== undefined ? args.modelOverride : args.cfg.model;
   return {
     skillName: args.cfg.module,
     provider: args.cfg.provider,
-    usedMockMode: args.cfg.usedMockMode,
-    fallbackReason: args.cfg.fallbackReason,
-    model: args.cfg.model,
+    usedMockMode,
+    fallbackReason,
+    model: usedMockMode && args.modelOverride === undefined ? null : model,
     endpoint: args.cfg.endpoint,
     assistantId: args.cfg.assistantId,
     startedAt: args.startedAt.toISOString(),
@@ -281,6 +331,7 @@ function buildInvocation(args: {
     inputSummary: summarize(args.inputSummary),
     outputSummary: summarize(args.outputSummary),
     errorMessage: args.errorMessage,
+    extras: args.extras ?? null,
   };
 }
 

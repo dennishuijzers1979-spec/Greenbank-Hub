@@ -1,0 +1,183 @@
+Preserve baseline behavior from commit 37983b08eb8ab608e984c91a39f3fe20f51e2102.
+
+Do not regress:
+- gate tests
+- typed 409 payloads
+- upload gating
+- AI analysis gating
+- submit gating
+- officer visibility
+- RBAC
+- document download permissions
+- Dutch UI language
+- server-side-only skill invocation
+- mock fallback behavior
+- AI skill invocation observability
+- skill source mapping structure
+- imported financing-product-advisor-dual-view skill pack
+
+Task: Enable a controlled OpenAI live pilot for FinancingProductAdvisorDualViewAdapter only.
+
+Context:
+The real ChatGPT skill pack for financing-product-advisor-dual-view has already been imported into:
+
+skills/financing-product-advisor-dual-view/SKILL.md
+
+The project owner has an OpenAI API key configured in Replit Secrets.
+No confirmed Assistant ID is available yet. If no assistant id exists, do not try to call a ChatGPT UI skill URL directly.
+
+Use the imported SKILL.md as the server-side system prompt for OpenAI invocation.
+
+Goal:
+Make only FinancingProductAdvisorDualViewAdapter capable of live OpenAI invocation, while keeping deterministic mock fallback and all existing gate behavior safe.
+
+1. Runtime behavior
+
+Use the existing provider-neutral AI runtime.
+
+Enable live behavior only when:
+- AI_SKILL_FINANCINGPRODUCTADVISORDUALVIEW_PROVIDER=openai
+- OPENAI_API_KEY is present
+
+Optional:
+- OPENAI_MODEL can override the model
+- default to the project’s configured OpenAI model if already present
+- if no model exists, choose a sensible default and document it
+
+Do not require Assistant ID.
+Do not hard-code Assistant ID.
+Do not call any ChatGPT UI skill URL.
+Do not enable live OpenAI for the other four adapters.
+
+2. Load the imported skill instructions
+
+In the server-side adapter:
+
+artifacts/api-server/src/lib/skills/financing-product-advisor-dual-view.ts
+
+When provider=openai:
+- load skills/financing-product-advisor-dual-view/SKILL.md from disk
+- use it as the system/developer instruction for the OpenAI request
+- send the adapter input as structured JSON
+- request JSON output only
+- use temperature 0 or the lowest deterministic setting available
+
+Do not expose the skill prompt or raw financial input to the frontend except through existing auditable analysis/report fields.
+
+3. Expected OpenAI response shape
+
+Validate that the OpenAI response is a JSON object with:
+
+{
+  "entrepreneur_view": {
+    "summary": "",
+    "strengths": [],
+    "weaknesses": [],
+    "financeability_score": 0,
+    "submission_readiness_score": 0,
+    "cta_status": "",
+    "todo_minimum": [],
+    "todo_optimal": []
+  },
+  "partner_view": {
+    "recommended_product": "",
+    "alternative_product": "",
+    "recommended_product_mix": [],
+    "recommendation_status": "",
+    "rationale": [],
+    "key_risks": [],
+    "evidence_gaps": [],
+    "indicative_structure": {
+      "amount": null,
+      "tenor_months": null,
+      "repayment_logic": "",
+      "collateral_logic": "",
+      "conditions": []
+    },
+    "shortlisted_products": []
+  }
+}
+
+If response is missing required structure, invalid JSON, or contradictory enough to fail validation:
+- record the error/fallback reason in SkillInvocation
+- fall back to the existing deterministic mock output
+- do not crash the whole AI pipeline
+
+4. Map OpenAI output to current adapter contract
+
+Map:
+- entrepreneur_view.financeability_score 1-10 → viabilityScore 0-100 by multiplying by 10 and clamping
+- dossier.annualRevenue → revenue
+- dossier.annualProfit → profit
+- dossier.requestedAmount → requested
+- derived profit / revenue → margin
+- existing deterministic DSCR proxy → dscr
+
+Also preserve the richer OpenAI skill output in invocation metadata or a safe structured field so it can be shown later in AI uitvoeringsdetails/financier report, without breaking the existing adapter contract.
+
+Do not let the live skill remove or destabilize margin/dscr/revenue/profit/requested fields, because the central gate depends on stable scores.
+
+5. Observability
+
+The AI uitvoeringsdetails row for FinancingProductAdvisorDualView must show:
+- provider=openai when live call succeeds
+- usedMockMode=false when live call succeeds
+- model
+- durationMs
+- output summary
+- fallbackReason if fallback happened
+
+If provider=openai is configured but the call fails:
+- usedMockMode=true
+- provider should still make clear that OpenAI was attempted
+- fallbackReason should explain the failure safely, without secrets
+
+6. Tests
+
+Add focused tests that do not require real OpenAI credentials:
+- default/no env still uses mock
+- provider=openai without OPENAI_API_KEY falls back to mock with clear fallbackReason
+- invalid OpenAI JSON response falls back to mock
+- valid mocked OpenAI response maps financeability_score to viabilityScore correctly
+- SkillInvocation does not leak OPENAI_API_KEY
+- other adapters remain mock unless explicitly configured
+
+Use dependency injection or a small OpenAI client wrapper so tests can mock the OpenAI response.
+
+7. README update
+
+Document:
+- required Replit Secrets:
+  - OPENAI_API_KEY
+  - AI_SKILL_FINANCINGPRODUCTADVISORDUALVIEW_PROVIDER=openai
+  - optional OPENAI_MODEL
+- that no Assistant ID is required for this path
+- that ChatGPT UI skill links are not called directly
+- how to confirm live vs mock in AI uitvoeringsdetails and Admin Integraties
+- rollback: remove AI_SKILL_FINANCINGPRODUCTADVISORDUALVIEW_PROVIDER or OPENAI_API_KEY to return to mock
+
+8. Run checks
+
+Run:
+pnpm run typecheck
+pnpm --filter @workspace/api-server run test
+pnpm run build
+node scripts/check-skill-packs.mjs
+
+9. Commit and push
+
+Commit with:
+
+Geenbank Hub: enable OpenAI pilot for financing product advisor
+
+10. Report back
+
+Report:
+- changed files
+- test/typecheck/build output
+- exact env vars required
+- whether OpenAI was actually called in your verification or mocked in tests only
+- how fallback behaves
+- what the AI uitvoeringsdetails panel shows
+- what remains mocked
+- known limitations or risks

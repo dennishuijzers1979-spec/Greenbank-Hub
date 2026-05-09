@@ -40,6 +40,51 @@ import {
 } from "../lib/skills";
 import { SKILL_MODULES } from "../lib/skills/types";
 import { skillOrchestrationService } from "../lib/skill-orchestration";
+import {
+  setOpenAIChatClientForTesting,
+  type OpenAIChatClient,
+  type OpenAIChatResponse,
+} from "../lib/skills/openai-client";
+
+const DUAL_PROVIDER_ENV = "AI_SKILL_FINANCINGPRODUCTADVISORDUALVIEW_PROVIDER";
+
+function withDualEnv<T>(
+  env: Record<string, string | undefined>,
+  fn: () => Promise<T> | T,
+): Promise<T> {
+  const keys = [
+    DUAL_PROVIDER_ENV,
+    "OPENAI_API_KEY",
+    "OPENAI_MODEL",
+    "AI_SKILL_PROVIDER",
+    "AI_SKILL_FINANCINGPRODUCTADVISORDUALVIEW_MODEL",
+  ];
+  const saved: Record<string, string | undefined> = {};
+  for (const k of keys) saved[k] = process.env[k];
+  for (const k of keys) {
+    const v = env[k];
+    if (v === undefined) delete process.env[k];
+    else process.env[k] = v;
+  }
+  return Promise.resolve()
+    .then(fn)
+    .finally(() => {
+      for (const [k, v] of Object.entries(saved)) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+    });
+}
+
+function makeFakeOpenAI(
+  responder: (req: unknown) => OpenAIChatResponse | Promise<OpenAIChatResponse>,
+): OpenAIChatClient {
+  return {
+    async chat(req) {
+      return responder(req);
+    },
+  };
+}
 
 let server: Server;
 let baseUrl: string;
@@ -238,6 +283,249 @@ test("every skill adapter emits a structured invocation record", async () => {
     assert.ok(["mock", "openai", "http", "replit"].includes(r.invocation.provider));
     assert.equal(r.invocation.usedMockMode, r.usedMockMode);
     assert.ok(r.invocation.outputSummary.length > 0);
+  }
+});
+
+// --- Dual-view OpenAI pilot -------------------------------------------------
+
+test("dual-view adapter stays on mock when no env vars are set", async () => {
+  const { dossierId } = await createDossier();
+  const [dossier] = await db
+    .select()
+    .from(dossiersTable)
+    .where(inArray(dossiersTable.id, [dossierId]));
+  await withDualEnv(
+    { [DUAL_PROVIDER_ENV]: undefined, OPENAI_API_KEY: undefined },
+    async () => {
+      const r = await FinancingProductAdvisorDualViewAdapter.run(ctxFor(dossier));
+      assert.equal(r.usedMockMode, true);
+      assert.equal(r.invocation.usedMockMode, true);
+      assert.equal(r.invocation.model, null);
+      assert.equal(r.invocation.fallbackReason, null);
+    },
+  );
+});
+
+test("dual-view adapter falls back to mock when provider=openai but key is missing", async () => {
+  const { dossierId } = await createDossier();
+  const [dossier] = await db
+    .select()
+    .from(dossiersTable)
+    .where(inArray(dossiersTable.id, [dossierId]));
+  await withDualEnv(
+    { [DUAL_PROVIDER_ENV]: "openai", OPENAI_API_KEY: undefined },
+    async () => {
+      const r = await FinancingProductAdvisorDualViewAdapter.run(ctxFor(dossier));
+      assert.equal(r.usedMockMode, true);
+      assert.equal(r.invocation.usedMockMode, true);
+      assert.ok(
+        r.invocation.fallbackReason &&
+          /OPENAI_API_KEY/i.test(r.invocation.fallbackReason),
+        `expected fallbackReason to mention OPENAI_API_KEY, got ${r.invocation.fallbackReason}`,
+      );
+    },
+  );
+});
+
+test("dual-view adapter falls back to mock when OpenAI returns invalid JSON", async () => {
+  const { dossierId } = await createDossier();
+  const [dossier] = await db
+    .select()
+    .from(dossiersTable)
+    .where(inArray(dossiersTable.id, [dossierId]));
+  setOpenAIChatClientForTesting(
+    makeFakeOpenAI(() => ({ content: "definitely not json", model: "fake-model" })),
+  );
+  try {
+    await withDualEnv(
+      { [DUAL_PROVIDER_ENV]: "openai", OPENAI_API_KEY: "sk-test-fake-1234567890" },
+      async () => {
+        const r = await FinancingProductAdvisorDualViewAdapter.run(ctxFor(dossier));
+        assert.equal(r.usedMockMode, true);
+        assert.equal(r.invocation.usedMockMode, true);
+        assert.equal(r.invocation.provider, "openai");
+        assert.ok(
+          r.invocation.fallbackReason &&
+            /JSON|ongeldig|mislukt/i.test(r.invocation.fallbackReason),
+          `unexpected fallbackReason: ${r.invocation.fallbackReason}`,
+        );
+        // Mock viabilityScore for this dossier (margin=0.20 →+20, dscr=4.17 →+15) → 85.
+        assert.equal(r.data.viabilityScore, 85);
+      },
+    );
+  } finally {
+    setOpenAIChatClientForTesting(null);
+  }
+});
+
+test("dual-view adapter maps a valid OpenAI response onto viabilityScore", async () => {
+  const { dossierId } = await createDossier();
+  const [dossier] = await db
+    .select()
+    .from(dossiersTable)
+    .where(inArray(dossiersTable.id, [dossierId]));
+  const skillResponse = {
+    entrepreneur_view: {
+      summary: "Sterke casus.",
+      strengths: ["Goede marge"],
+      weaknesses: [],
+      financeability_score: 8,
+      submission_readiness_score: 7,
+      cta_status: "ready_to_submit",
+      todo_minimum: [],
+      todo_optimal: [],
+    },
+    partner_view: {
+      recommended_product: "business term loan",
+      alternative_product: "revolving credit",
+      recommended_product_mix: [],
+      recommendation_status: "strong",
+      rationale: ["Goede dekking"],
+      key_risks: [],
+      evidence_gaps: [],
+      indicative_structure: {
+        amount: 200000,
+        tenor_months: 60,
+        repayment_logic: "annuiteit",
+        collateral_logic: "borgstelling",
+        conditions: [],
+      },
+      shortlisted_products: [],
+    },
+  };
+  setOpenAIChatClientForTesting(
+    makeFakeOpenAI(() => ({
+      content: JSON.stringify(skillResponse),
+      model: "gpt-4o-mini",
+    })),
+  );
+  try {
+    await withDualEnv(
+      { [DUAL_PROVIDER_ENV]: "openai", OPENAI_API_KEY: "sk-test-fake-1234567890" },
+      async () => {
+        const r = await FinancingProductAdvisorDualViewAdapter.run(ctxFor(dossier));
+        assert.equal(r.ok, true);
+        assert.equal(r.usedMockMode, false);
+        assert.equal(r.invocation.usedMockMode, false);
+        assert.equal(r.invocation.provider, "openai");
+        assert.equal(r.invocation.model, "gpt-4o-mini");
+        assert.equal(r.invocation.fallbackReason, null);
+        // financeability_score=8 → viabilityScore=80.
+        assert.equal(r.data.viabilityScore, 80);
+        // Pass-through fields stay derived from dossier, not from the skill.
+        assert.equal(r.data.revenue, 500000);
+        assert.equal(r.data.profit, 100000);
+        assert.equal(r.data.requested, 200000);
+        // Rich payload preserved on extras for the AI uitvoeringsdetails panel.
+        const extras = r.invocation.extras as { response?: typeof skillResponse } | null;
+        assert.ok(extras && extras.response, "extras.response missing");
+        assert.equal(extras!.response!.entrepreneur_view.cta_status, "ready_to_submit");
+      },
+    );
+  } finally {
+    setOpenAIChatClientForTesting(null);
+  }
+});
+
+test("dual-view adapter never leaks OPENAI_API_KEY into the SkillInvocation", async () => {
+  const { dossierId } = await createDossier();
+  const [dossier] = await db
+    .select()
+    .from(dossiersTable)
+    .where(inArray(dossiersTable.id, [dossierId]));
+  const secretKey = "sk-test-secretvalue-shouldnotleak-7777777777";
+  // Fake client that intentionally tries to smuggle the key through the
+  // response body — we assert the adapter scrubs it out of `extras`.
+  setOpenAIChatClientForTesting(
+    makeFakeOpenAI(() => ({
+      content: JSON.stringify({
+        entrepreneur_view: {
+          summary: `key=${secretKey}`,
+          strengths: [],
+          weaknesses: [],
+          financeability_score: 5,
+          submission_readiness_score: 5,
+          cta_status: "ready_to_submit_with_evidence_boosters",
+          todo_minimum: [],
+          todo_optimal: [],
+        },
+        partner_view: {
+          recommended_product: "",
+          alternative_product: "",
+          recommended_product_mix: [],
+          recommendation_status: "provisional",
+          rationale: [],
+          key_risks: [],
+          evidence_gaps: [],
+          indicative_structure: {
+            amount: null,
+            tenor_months: null,
+            repayment_logic: "",
+            collateral_logic: "",
+            conditions: [],
+          },
+          shortlisted_products: [],
+        },
+        api_key: secretKey,
+        authorization: `Bearer ${secretKey}`,
+      }),
+      model: "gpt-4o-mini",
+    })),
+  );
+  try {
+    await withDualEnv(
+      { [DUAL_PROVIDER_ENV]: "openai", OPENAI_API_KEY: secretKey },
+      async () => {
+        const r = await FinancingProductAdvisorDualViewAdapter.run(ctxFor(dossier));
+        const serialized = JSON.stringify(r.invocation);
+        assert.ok(!serialized.includes(secretKey), "raw secret key leaked");
+        assert.ok(
+          !/sk-test-secretvalue-shouldnotleak/.test(serialized),
+          "raw secret prefix leaked",
+        );
+      },
+    );
+  } finally {
+    setOpenAIChatClientForTesting(null);
+  }
+});
+
+test("other adapters remain on mock when only the dual-view provider env is set", async () => {
+  const { dossierId } = await createDossier();
+  const [dossier] = await db
+    .select()
+    .from(dossiersTable)
+    .where(inArray(dossiersTable.id, [dossierId]));
+  // Even with OPENAI_API_KEY set, the other four adapters must never
+  // hit the OpenAI client — only the dual-view adapter has a live path
+  // wired, and it requires its per-skill PROVIDER env to be set.
+  let openAiCalls = 0;
+  setOpenAIChatClientForTesting(
+    makeFakeOpenAI(() => {
+      openAiCalls += 1;
+      throw new Error("other adapters must not call OpenAI");
+    }),
+  );
+  try {
+    await withDualEnv(
+      { [DUAL_PROVIDER_ENV]: undefined, OPENAI_API_KEY: "sk-test-fake-1234567890" },
+      async () => {
+        const ctx = ctxFor(dossier);
+        const need = await FinancingNeedAssessorAdapter.run(ctx);
+        const credit = await CreditProductAdvisorAdapter.run(ctx);
+        const dual = await FinancingProductAdvisorDualViewAdapter.run(ctx);
+        // Adapters returned without throwing → none of them invoked the
+        // (throwing) fake OpenAI client.
+        assert.equal(openAiCalls, 0, "no adapter should call OpenAI");
+        assert.ok(need.ok && credit.ok && dual.ok);
+        // The dual-view adapter, lacking its per-skill PROVIDER env,
+        // also stays on mock and reports it honestly.
+        assert.equal(dual.usedMockMode, true);
+        assert.equal(dual.invocation.usedMockMode, true);
+      },
+    );
+  } finally {
+    setOpenAIChatClientForTesting(null);
   }
 });
 

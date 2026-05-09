@@ -198,3 +198,80 @@ The skill packs for the other four adapters (`credit-product-advisor`,
 `financing-need-assessor`, `geenbank-kredietworkflow`,
 `moneycare-kredietmemorandum-fabriek`) remain placeholders awaiting their
 own archive imports.
+
+### Live OpenAI pilot — financing-product-advisor-dual-view only
+
+The `FinancingProductAdvisorDualView` adapter is the **only** adapter that
+can currently invoke OpenAI live. All four other adapters keep running in
+deterministic mock mode regardless of env vars.
+
+#### Required Replit Secrets to enable the pilot
+
+| Secret | Purpose |
+| --- | --- |
+| `OPENAI_API_KEY` | Standard OpenAI API key (begins with `sk-…`). |
+| `AI_SKILL_FINANCINGPRODUCTADVISORDUALVIEW_PROVIDER=openai` | Per-skill opt-in. **Required** — the adapter stays on mock without it, even if the API key is set. |
+| `OPENAI_MODEL` *(optional)* | Override the model. Defaults to `gpt-4o-mini`. Per-skill override `AI_SKILL_FINANCINGPRODUCTADVISORDUALVIEW_MODEL` also accepted. |
+
+Notes:
+
+* **No Assistant ID is required** for this path. The adapter uses the
+  Chat Completions API with the imported `skills/financing-product-advisor-dual-view/SKILL.md`
+  as the `system` message and the dossier payload as the `user` message,
+  in JSON mode at temperature 0.
+* The adapter never calls a ChatGPT UI skill URL directly — those
+  endpoints are not API endpoints.
+* The OpenAI key is only ever read from `process.env`. It is never
+  written to logs, the database, or the `SkillInvocation` record. The
+  adapter additionally scrubs `sk-…` patterns and `api_key` /
+  `authorization` keys from the structured `extras` payload before
+  persisting.
+
+#### Confirming live vs mock
+
+After enabling the pilot, open any dossier under *AI Analyse →
+AI uitvoeringsdetails*. The row for `FinancingProductAdvisorDualView`
+shows:
+
+* `provider`: `openai` when the live call succeeded, `openai` (with
+  `usedMockMode=true` and a `fallbackReason`) when OpenAI was attempted
+  and failed, `mock` when the per-skill provider env was not set.
+* `usedMockMode`: `false` only when the live call succeeded.
+* `model`: the OpenAI model that responded.
+* `durationMs`: end-to-end latency including the network call.
+* `fallbackReason`: a Dutch explanation when the live call was
+  attempted but failed (missing key, non-JSON response, schema
+  mismatch).
+
+The admin **Integraties** card shows the same per-skill breakdown, so an
+administrator can confirm at a glance that the four other adapters are
+still on mock.
+
+#### Rollback
+
+Remove either env var to fully restore mock mode for this adapter:
+
+* unset `AI_SKILL_FINANCINGPRODUCTADVISORDUALVIEW_PROVIDER`, or
+* unset `OPENAI_API_KEY`.
+
+No code change required. The next dossier run will record
+`provider=mock`, `usedMockMode=true`, `fallbackReason=null` for the
+dual-view skill, and the central gate will continue to use the
+deterministic mock viability score.
+
+#### Failure handling
+
+The dual-view adapter is the only adapter that drives `viabilityScore`,
+which feeds the central gate. To keep the gate stable:
+
+* `revenue`, `profit`, `requested`, `margin`, and `dscr` are always
+  derived in-process from the dossier, never from the live skill
+  response.
+* If OpenAI returns invalid JSON, an unexpected schema, an
+  out-of-range `financeability_score`, or any HTTP error, the adapter
+  falls back to the deterministic mock `viabilityScore`, marks
+  `usedMockMode=true`, and records the failure in `fallbackReason` —
+  the AI pipeline does not crash.
+* The full live skill response (when valid) is preserved on
+  `SkillInvocation.extras` for the *AI uitvoeringsdetails* panel and
+  for use by the financier-facing report later.
