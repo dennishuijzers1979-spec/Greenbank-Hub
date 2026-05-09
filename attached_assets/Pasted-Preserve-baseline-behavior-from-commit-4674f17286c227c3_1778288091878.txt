@@ -1,0 +1,132 @@
+Preserve baseline behavior from commit 4674f17286c227c34110015390508892996b8dbf.
+
+Do not regress:
+- gate tests
+- typed 409 payloads
+- upload gating
+- AI analysis gating
+- submit gating
+- officer visibility
+- RBAC
+- document download permissions
+- Dutch UI language
+- server-side-only skill invocation
+- mock fallback behavior
+- AI skill invocation observability
+- skill source mapping structure
+
+Task: Import and prepare the real ChatGPT skill pack for financing-product-advisor-dual-view.
+
+Context:
+The project owner has provided a ChatGPT skill archive containing:
+- financing-product-advisor-dual-view/SKILL.md
+- financing-product-advisor-dual-view/agents/openai.yaml
+- financing-product-advisor-dual-view/references/api_reference.md
+- financing-product-advisor-dual-view/references/output-notes.md
+
+This is the real skill source for the existing FinancingProductAdvisorDualViewAdapter.
+
+Goal:
+Import this skill pack into the repo and prepare it for real OpenAI/ChatGPT-backed invocation, without enabling live calls yet and without breaking current mock behavior.
+
+1. Import the skill pack
+
+Copy the archive contents into:
+
+skills/financing-product-advisor-dual-view/
+
+Replace the placeholder instruction content with the real SKILL.md content from the archive.
+Keep or merge any useful placeholder notes about:
+- no secrets
+- expected adapter input
+- expected adapter output
+- JSON-compatible/auditable outputs
+
+Do not commit API keys, tokens, assistant IDs, or secrets.
+
+2. Preserve references
+
+Include:
+- agents/openai.yaml
+- references/api_reference.md
+- references/output-notes.md
+
+If api_reference.md is only placeholder content, keep it but label it as placeholder reference content.
+
+3. Add output mapping documentation
+
+The imported skill returns a JSON object with:
+- entrepreneur_view
+- partner_view
+
+Compare that with the current FinancingProductAdvisorDualViewAdapter output contract.
+
+Document the mapping in either:
+- docs/ai-skill-source-mapping.md
+or
+- skills/financing-product-advisor-dual-view/SKILL.md
+
+The mapping must explain how:
+- financeability_score
+- submission_readiness_score
+- cta_status
+- recommended_product
+- alternative_product
+- recommended_product_mix
+- recommendation_status
+- indicative_structure
+- shortlisted_products
+
+will map into the adapter/orchestrator fields currently used by Geenbank Hub.
+
+4. Add validation test
+
+Add a focused backend test or script that validates:
+- the skill pack exists
+- SKILL.md exists
+- agents/openai.yaml exists
+- output JSON shape from the skill instructions is documented
+- no obvious secrets are present
+- the adapter mapping documentation exists
+
+Do not call OpenAI yet.
+
+5. Do not enable live invocation yet
+
+Keep provider runtime behavior unchanged.
+The adapter may continue deterministic mock mode.
+Do not add or require OPENAI_API_KEY yet.
+Do not hard-code Assistant IDs.
+Do not claim this skill is live.
+
+6. Update README
+
+Document:
+- this skill pack has been imported
+- it is ready for mapping/live-connection work
+- live invocation still requires OpenAI/API configuration
+- where to see mock vs real status in the UI
+
+7. Run checks
+
+Run:
+pnpm run typecheck
+pnpm --filter @workspace/api-server run test
+pnpm run build
+node scripts/check-skill-packs.mjs
+
+8. Commit and push
+
+Commit with:
+
+Geenbank Hub: import financing product advisor skill pack
+
+9. Report back
+
+Report:
+- changed files
+- test/typecheck/build output
+- whether any secrets were detected
+- how the skill output maps to the adapter
+- what remains mocked
+- exact next step to enable live OpenAI invocation for this skill
