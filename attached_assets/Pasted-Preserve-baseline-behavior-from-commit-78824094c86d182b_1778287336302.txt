@@ -1,0 +1,134 @@
+Preserve baseline behavior from commit 78824094c86d182be3ef111cd4b5e8993eec43a0.
+
+Do not regress:
+- gate tests
+- typed 409 payloads
+- upload gating
+- AI analysis gating
+- submit gating
+- officer visibility
+- RBAC
+- document download permissions
+- Dutch UI language
+- server-side-only skill invocation
+- mock fallback behavior
+- AI skill invocation observability
+
+Task: Prepare real ChatGPT/OpenAI skill connection plan without wiring secrets yet.
+
+Context:
+The project owner has the intended financial skills in ChatGPT Business under “Vaardigheden”:
+- credit-product-advisor
+- financing-need-assessor
+- financing-product-advisor-dual-view
+- geenbank-kredietworkflow
+- moneycare-kredietmemorandum-fabriek
+
+The app now has provider-neutral AI runtime observability, but the real skills are not connected yet.
+
+Goal:
+Create a concrete connection plan and repo-ready structure for using the real ChatGPT/OpenAI skills server-side, without breaking mock mode and without exposing secrets.
+
+1. Inspect the current AI runtime and adapters
+
+Review:
+- runtime config
+- all five adapters
+- AIAnalysisRun skillInvocations persistence
+- admin/loan officer AI uitvoeringsdetails UI
+- README AI observability docs
+
+Do not rewrite the architecture.
+
+2. Add a skill source mapping document
+
+Create a document such as:
+
+docs/ai-skill-source-mapping.md
+
+It must explain for each skill:
+- current adapter name
+- current mock behavior
+- intended real skill source
+- required input schema
+- expected output schema
+- current missing runtime interface
+- possible connection methods:
+  - OpenAI API with exported skill instructions
+  - OpenAI Assistant/Agent ID
+  - HTTP endpoint/webhook
+  - Replit/local callable capability
+- required environment variables
+- risks and validation steps
+
+3. Add repo placeholders for skill instruction packs
+
+Create a clean folder structure, for example:
+
+skills/
+  credit-product-advisor/
+    SKILL.md
+  financing-need-assessor/
+    SKILL.md
+  financing-product-advisor-dual-view/
+    SKILL.md
+  geenbank-kredietworkflow/
+    SKILL.md
+  moneycare-kredietmemorandum-fabriek/
+    SKILL.md
+
+Each SKILL.md should be a placeholder template, not fake production logic.
+
+Each file should say:
+- paste/export the real ChatGPT skill instructions here
+- expected input from adapter
+- expected output to adapter
+- do not put API keys or secrets here
+- keep outputs JSON-compatible and auditable
+
+4. Update runtime docs
+
+Update README/developer notes with:
+- how to move from mock mode to OpenAI-backed skill mode
+- where to place exported skill instructions
+- which env vars are needed
+- how to confirm in the UI whether a skill is mock or real
+- how to roll back to mock mode safely
+
+5. Do not wire secrets or make live calls yet
+
+Do not add real API keys.
+Do not hard-code assistant IDs.
+Do not remove mock fallback.
+Do not claim real skills are connected unless a callable interface exists.
+
+6. Add lightweight validation
+
+If useful, add a small script or test that verifies:
+- all five skill instruction placeholder folders exist
+- each skill has a SKILL.md
+- runtime still defaults safely to mock mode
+- no secrets are present in skill files
+
+7. Run checks
+
+Run:
+pnpm run typecheck
+pnpm run build
+pnpm --filter @workspace/api-server run test
+
+8. Commit and push
+
+Commit with:
+
+Geenbank Hub: document real AI skill connection path
+
+9. Report back
+
+Report:
+- changed files
+- test/typecheck/build output
+- where the skill source mapping lives
+- what I need to provide from ChatGPT Skills
+- what remains mocked
+- exact next step to connect
