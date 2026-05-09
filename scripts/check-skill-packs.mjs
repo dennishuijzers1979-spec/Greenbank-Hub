@@ -96,8 +96,8 @@ for (const skill of IMPORTED_SKILLS) {
 }
 
 const SECRET_PATTERNS = [
-  /OPENAI_API_KEY\s*=\s*\S+/i,
-  /ANTHROPIC_API_KEY\s*=\s*\S+/i,
+  /OPENAI_API_KEY\s*=\s*['"]?sk-[A-Za-z0-9]/i,
+  /ANTHROPIC_API_KEY\s*=\s*['"]?sk-[A-Za-z0-9]/i,
   /\bsk-[A-Za-z0-9]{20,}\b/,
   /\bxoxb-[A-Za-z0-9-]{20,}\b/,
 ];
