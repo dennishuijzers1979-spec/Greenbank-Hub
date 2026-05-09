@@ -215,11 +215,16 @@ const PASSING_SCORES = {
   viability: 95,
 };
 
+interface ApiResponse {
+  status: number;
+  json: unknown;
+}
+
 async function apiPost(
   path: string,
   sessionToken?: string,
   body?: unknown,
-): Promise<{ status: number; json: any }> {
+): Promise<ApiResponse> {
   const res = await fetch(`${baseUrl}${path}`, {
     method: "POST",
     headers: {
@@ -236,13 +241,10 @@ async function apiPost(
   } catch {
     /* no body */
   }
-  return { status: res.status, json: json as any };
+  return { status: res.status, json };
 }
 
-async function apiGet(
-  path: string,
-  sessionToken?: string,
-): Promise<{ status: number; json: any }> {
+async function apiGet(path: string, sessionToken?: string): Promise<ApiResponse> {
   const res = await fetch(`${baseUrl}${path}`, {
     headers: {
       ...(sessionToken
@@ -256,12 +258,16 @@ async function apiGet(
   } catch {
     /* no body */
   }
-  return { status: res.status, json: json as any };
+  return { status: res.status, json };
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  assert.ok(value && typeof value === "object", "expected object payload");
+  return value as Record<string, unknown>;
 }
 
 function assertGateBlockedShape(payload: unknown): void {
-  assert.ok(payload && typeof payload === "object", "payload is object");
-  const p = payload as Record<string, unknown>;
+  const p = asRecord(payload);
   assert.equal(typeof p.error, "string");
   assert.equal(typeof p.message, "string");
   assert.ok(Array.isArray(p.reasons));
@@ -407,7 +413,7 @@ test("/dossiers/me/run-analysis returns 409 with structured GateBlockedError sha
   const res = await apiPost("/dossiers/me/run-analysis", ctx.sessionToken);
   assert.equal(res.status, 409);
   assertGateBlockedShape(res.json);
-  assert.equal(res.json.error, "AI-analyse geblokkeerd");
+  assert.equal(asRecord(res.json).error, "AI-analyse geblokkeerd");
 });
 
 test("/dossiers/me/submit returns 409 with structured GateBlockedError shape", async () => {
@@ -415,7 +421,7 @@ test("/dossiers/me/submit returns 409 with structured GateBlockedError shape", a
   const res = await apiPost("/dossiers/me/submit", ctx.sessionToken);
   assert.equal(res.status, 409);
   assertGateBlockedShape(res.json);
-  assert.equal(res.json.error, "Dossier kan nog niet ingediend worden");
+  assert.equal(asRecord(res.json).error, "Dossier kan nog niet ingediend worden");
 });
 
 test("submit and run-analysis 409 payloads share the same key set (no drift)", async () => {
@@ -428,8 +434,8 @@ test("submit and run-analysis 409 payloads share the same key set (no drift)", a
   assert.equal(submit.status, 409);
   assert.equal(analyse.status, 409);
   assert.deepEqual(
-    Object.keys(submit.json).sort(),
-    Object.keys(analyse.json).sort(),
+    Object.keys(asRecord(submit.json)).sort(),
+    Object.keys(asRecord(analyse.json)).sort(),
   );
 });
 
@@ -454,7 +460,8 @@ test("officer dossier list only shows OFFICER_VISIBLE_STATUSES", async () => {
   const officer = await createUser("loan_officer");
   const res = await apiGet("/dossiers", officer.sessionToken);
   assert.equal(res.status, 200);
-  const ids: string[] = (res.json as Array<{ id: string }>).map((d) => d.id);
+  assert.ok(Array.isArray(res.json));
+  const ids = (res.json as ReadonlyArray<{ id: string }>).map((d) => d.id);
   assert.ok(ids.includes(visible.dossierId), "visible dossier present");
   assert.ok(!ids.includes(hidden.dossierId), "hidden dossier absent");
 });
@@ -532,8 +539,9 @@ test("document download for an officer reaches storage layer once dossier is sub
   // returns 404 with the demo-data message. That's still proof that the
   // request was authorised (status 401/403 would mean the gate blocked).
   assert.equal(res.status, 404);
-  assert.match(
-    String((res.json && (res.json as { error?: string }).error) ?? ""),
-    /demo-data/,
-  );
+  const errorMessage =
+    res.json && typeof res.json === "object"
+      ? String((res.json as { error?: unknown }).error ?? "")
+      : "";
+  assert.match(errorMessage, /demo-data/);
 });
