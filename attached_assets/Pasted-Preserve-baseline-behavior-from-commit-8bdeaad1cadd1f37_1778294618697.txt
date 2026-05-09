@@ -1,0 +1,90 @@
+Preserve baseline behavior from commit 8bdeaad1cadd1f374c79391bf945aceb5e323e3f.
+
+Runtime state:
+- FinancingProductAdvisorDualView has a working live OpenAI implementation when explicitly configured.
+- Other adapters remain deterministic/mock unless explicitly wired in future work.
+- AI execution labels were fixed to distinguish Live OpenAI, Fallback naar mock, and Deterministisch / mock.
+
+Do not change code.
+Do not commit anything.
+This is inspection/runtime verification only.
+
+Task: Verify the corrected AI execution labels after the runtime honesty fix.
+
+1. Restart the app so the latest code and Replit Secrets are loaded.
+
+2. Run one controlled demo dossier through:
+- pre-validation
+- full AI analysis
+
+Use the same or similar demo dossier as before if available.
+
+3. Inspect AI uitvoeringsdetails for the latest run.
+
+Expected:
+- FinancingProductAdvisorDualView shows:
+  - mode: Live OpenAI
+  - provider: openai
+  - usedMockMode=false
+  - model: gpt-5.2 or the served snapshot
+  - durationMs significantly above 0
+  - fallbackReason empty/null
+  - extras.response contains entrepreneur_view and partner_view
+
+- FinancingNeedAssessor shows:
+  - mode: Deterministisch / mock
+  - not Live OpenAI
+  - no misleading model display if no OpenAI call happened
+  - duration may be near 0
+
+- CreditProductAdvisor shows:
+  - mode: Deterministisch / mock
+  - not Live OpenAI
+
+- GeenbankKredietworkflow shows:
+  - mode: Deterministisch / mock
+  - not Live OpenAI
+
+- MoneycareKredietmemorandum shows:
+  - mode: Deterministisch / mock
+  - not Live OpenAI
+
+4. Inspect Admin Integraties.
+
+Expected:
+- It should clearly show that only FinancingProductAdvisorDualView is live OpenAI.
+- Other skills should be labeled deterministic/mock or not live.
+- It should not imply that all five skills are live just because OPENAI_API_KEY exists.
+
+5. Check language quality from the new Dutch directive.
+
+Inspect the latest FinancingProductAdvisorDualView extras.response:
+- entrepreneur_view free text should be Dutch NL-NL
+- partner_view free text should now be Dutch NL-NL
+- machine enums may remain English
+- product names may stay canonical if needed
+
+6. Confirm gate/report stability.
+
+Confirm:
+- central gate did not crash
+- viabilityScore remains valid 0-100
+- revenue/profit/requested still derived from dossier data
+- margin/dscr still deterministic
+- entrepreneur report renders
+- financier report renders
+
+7. Report back exactly:
+
+- whether OpenAI was actually called
+- full AI uitvoeringsdetails summary for all 5 rows
+- whether labels are now honest
+- whether Admin Integraties labels are now honest
+- model shown for the live row
+- fallbackReason if any
+- language quality: Dutch/English/mixed
+- viabilityScore
+- whether reports rendered
+- whether any code changes were needed
+
+Again: do not change code and do not commit unless you find a blocking runtime bug and ask first.
