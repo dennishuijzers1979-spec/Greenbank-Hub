@@ -1,0 +1,11 @@
+interface:
+  display_name: Financing Product Advisor Dual View
+  short_description: Dual-output financing product advice for entrepreneur and partner
+    views
+policy:
+  products:
+  - chatgpt
+  - codex
+  - api
+  - atlas
+  allow_implicit_invocation: true

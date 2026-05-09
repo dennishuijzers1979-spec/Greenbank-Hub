@@ -94,13 +94,39 @@ For every skill below the columns mean:
 | Adapter | `artifacts/api-server/src/lib/skills/financing-product-advisor-dual-view.ts` |
 | SKILL_MODULE | `FinancingProductAdvisorDualView` |
 | Mock behaviour | Computes margin, DSCR, and a `viabilityScore` from revenue/cost/profit/requested amount. |
-| Real source | ChatGPT Skill **`financing-product-advisor-dual-view`**. |
-| Input schema | `{ revenue, cost, profit, requested, financingTypePreference, ... }` |
-| Output schema | `{ viabilityScore, revenue, profit, requested, margin, dscr }` |
-| Missing runtime piece | Real LLM call + JSON-mode parsing. |
+| Real source | ChatGPT Skill **`financing-product-advisor-dual-view`** — **imported** under `skills/financing-product-advisor-dual-view/` (SKILL.md + `agents/openai.yaml` + `references/`). |
+| Input schema | `{ dossier: { annualRevenue, annualCost, annualProfit, requestedAmount, financingTypePreference, financingPurpose, companyDescription }, evidence: { documents[], geenbankKredietworkflow } }` |
+| Output schema (skill) | `{ entrepreneur_view: { summary, strengths[], weaknesses[], financeability_score (1-10), submission_readiness_score (1-10), cta_status, todo_minimum[], todo_optimal[] }, partner_view: { recommended_product, alternative_product, recommended_product_mix[], recommendation_status, rationale[], key_risks[], evidence_gaps[], indicative_structure, shortlisted_products[] } }` |
+| Output schema (adapter today) | `{ viabilityScore, revenue, profit, requested, margin, dscr }` |
+| Missing runtime piece | Real LLM call + JSON-mode parsing + mapping skill JSON onto the adapter contract (see table below). |
 | Recommended method | OpenAI Assistant id (skill is opinionated and prompt-tuned in ChatGPT). |
 | Required env | `OPENAI_API_KEY`, `AI_SKILL_FINANCINGPRODUCTADVISORDUALVIEW_ASSISTANT_ID`. |
-| Risks / validation | `viabilityScore` is read by `GeenbankKredietworkflow` and the central gate — must be deterministic enough to not flip verdicts on retry. Consider temperature 0. |
+| Risks / validation | `viabilityScore` is read by `GeenbankKredietworkflow` and the central gate — must be deterministic enough to not flip verdicts on retry. Use temperature 0 + JSON mode. |
+
+#### Output mapping (skill JSON → adapter contract)
+
+When live invocation is wired, map the skill response onto the existing
+`FinancingProductAdvisorDualViewOutput` and persist the full skill payload
+alongside it for the *AI uitvoeringsdetails* panel.
+
+| Skill field | Adapter field today | Notes |
+| --- | --- | --- |
+| `entrepreneur_view.financeability_score` (1-10) | `viabilityScore` (0-100) | Multiply by 10, clamp via `pct()`. Drives the central gate. |
+| `entrepreneur_view.submission_readiness_score` | *(persist alongside)* | Surface in the *AI uitvoeringsdetails* panel. |
+| `entrepreneur_view.cta_status` | *(persist alongside)* | Render in entrepreneur report. |
+| `entrepreneur_view.summary` / `strengths` / `weaknesses` | *(consumed by `GeenbankKredietworkflow`)* | Forward, don't duplicate. |
+| `entrepreneur_view.todo_minimum` / `todo_optimal` | *(consumed by `GeenbankKredietworkflow`)* | → `entrepreneurReport.actionPoints`. |
+| `partner_view.recommended_product` / `alternative_product` / `recommended_product_mix` | *(persist alongside)* | Render in financier-facing report. |
+| `partner_view.recommendation_status` (`strong`/`provisional`/`weak`) | *(persist alongside)* | Display next to verdict for officers. |
+| `partner_view.indicative_structure` | *(persist alongside)* | Forward to `MoneycareKredietmemorandum`. |
+| `partner_view.shortlisted_products[]` | *(persist alongside)* | Small table in the *AI uitvoeringsdetails* panel. |
+| (input echo) `dossier.annualRevenue` / `annualProfit` / `requestedAmount` | `revenue` / `profit` / `requested` | Pass-through from input, not produced by skill. |
+| Derived `profit / revenue` | `margin` | Compute in adapter — do not rely on the skill. |
+| Derived DSCR proxy | `dscr` | Compute in adapter — keeps the gate stable if the skill omits it. |
+
+The full per-skill mapping with hard rules also lives in
+[`skills/financing-product-advisor-dual-view/SKILL.md`](../skills/financing-product-advisor-dual-view/SKILL.md)
+under the *Repo integration notes* section.
 
 ### 4. geenbank-kredietworkflow
 

@@ -173,3 +173,28 @@ in every persisted `SkillInvocation`. No code change required.
 Use `node scripts/check-skill-packs.mjs` to verify that all five
 skill folders exist, no plain-text secrets slipped into a SKILL.md,
 and the runtime still defaults to mock when no AI env vars are set.
+
+### Imported skill packs
+
+The real ChatGPT skill pack for **`financing-product-advisor-dual-view`**
+has been imported under
+[`skills/financing-product-advisor-dual-view/`](../../skills/financing-product-advisor-dual-view)
+(SKILL.md + `agents/openai.yaml` + `references/`). The pack is ready for
+the mapping / live-connection work described in
+[`docs/ai-skill-source-mapping.md`](../../docs/ai-skill-source-mapping.md):
+
+* **Live invocation is not enabled.** The adapter
+  (`artifacts/api-server/src/lib/skills/financing-product-advisor-dual-view.ts`)
+  still runs the deterministic mock and continues to drive the central
+  gate via `viabilityScore`.
+* No `OPENAI_API_KEY` or assistant id is required to run the app today.
+* When live invocation is wired, the *AI Analyse → AI uitvoeringsdetails*
+  panel and the admin *Integraties* card will switch the row for this
+  skill from `mock (live)` to `openai (live)`. Until then both surfaces
+  keep showing `mock (live)` and the `SkillInvocation.fallbackReason`
+  field documents why.
+
+The skill packs for the other four adapters (`credit-product-advisor`,
+`financing-need-assessor`, `geenbank-kredietworkflow`,
+`moneycare-kredietmemorandum-fabriek`) remain placeholders awaiting their
+own archive imports.
