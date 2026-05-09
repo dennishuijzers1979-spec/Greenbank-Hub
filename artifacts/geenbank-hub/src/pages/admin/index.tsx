@@ -1,4 +1,4 @@
-import { useGetAdminMetrics, getGetAdminMetricsQueryKey, useGetIntegrationsStatus, getGetIntegrationsStatusQueryKey } from "@workspace/api-client-react";
+import { useGetAdminMetrics, getGetAdminMetricsQueryKey, useGetIntegrationsStatus, getGetIntegrationsStatusQueryKey, type IntegrationStatus } from "@workspace/api-client-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Database, Link as LinkIcon, Activity, CheckCircle2, XCircle, Loader2 } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
@@ -87,16 +87,36 @@ export default function AdminDashboard() {
             <CardTitle className="flex items-center gap-2"><LinkIcon className="w-5 h-5" /> Integraties</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            {integrations && Object.entries(integrations).map(([key, status]) => (
-              <div key={key} className="flex items-center justify-between p-3 border rounded-lg">
-                <div>
-                  <p className="font-medium capitalize">{status.name}</p>
-                  <p className="text-xs text-muted-foreground">{status.message}</p>
+            {integrations && (Object.entries(integrations) as Array<[string, IntegrationStatus]>).map(([key, status]) => (
+              <div key={key} className="p-3 border rounded-lg">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="font-medium capitalize">{status.name}</p>
+                    <p className="text-xs text-muted-foreground">{status.message}</p>
+                  </div>
+                  {status.live ? (
+                    <CheckCircle2 className="w-5 h-5 text-green-500" />
+                  ) : (
+                    <XCircle className="w-5 h-5 text-red-500" />
+                  )}
                 </div>
-                {status.live ? (
-                  <CheckCircle2 className="w-5 h-5 text-green-500" />
-                ) : (
-                  <XCircle className="w-5 h-5 text-red-500" />
+                {status.runtime && status.runtime.perSkill && status.runtime.perSkill.length > 0 && (
+                  <div className="mt-3 border-t pt-2 space-y-1">
+                    <p className="text-[11px] text-muted-foreground uppercase tracking-wide">Skills ({status.runtime.liveSkills} live / {status.runtime.totalSkills} totaal)</p>
+                    {status.runtime.perSkill.map((s) => (
+                      <div key={s.module} className="flex items-center justify-between text-xs gap-2">
+                        <span className="font-mono truncate">{s.module}</span>
+                        <span className={`px-1.5 py-0.5 rounded text-[10px] ${s.usedMockMode ? 'bg-amber-100 text-amber-800' : 'bg-green-100 text-green-800'}`}>
+                          {s.provider}{s.model ? ` · ${s.model}` : ''}
+                        </span>
+                      </div>
+                    ))}
+                    {status.runtime.perSkill.some((s) => s.fallbackReason) && (
+                      <p className="text-[11px] text-amber-700 mt-1">
+                        Een of meer skills vielen terug op mock — controleer ontbrekende variabelen.
+                      </p>
+                    )}
+                  </div>
                 )}
               </div>
             ))}

@@ -7,7 +7,8 @@ import {
   useListDossierDocuments, getListDossierDocumentsQueryKey,
   useGenerateMemorandum, useGetMemorandum, getGetMemorandumQueryKey,
   useListPartners, getListPartnersQueryKey,
-  useSubmitDossierToPartners
+  useSubmitDossierToPartners,
+  useGetLatestRun, getGetLatestRunQueryKey,
 } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
@@ -16,7 +17,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Checkbox } from "@/components/ui/checkbox";
-import { AlertCircle, AlertTriangle, ArrowLeft, Building2, CheckCircle2, Clock, Download, FileText, Loader2, Send, XCircle } from "lucide-react";
+import { Activity, AlertCircle, AlertTriangle, ArrowLeft, Building2, CheckCircle2, Clock, Download, FileText, Loader2, Send, XCircle } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { format } from "date-fns";
 import { nl } from "date-fns/locale";
@@ -68,6 +69,7 @@ export default function DossierDetail() {
 
   const { data: dossier, isLoading } = useGetDossier(id, { query: { queryKey: getGetDossierQueryKey(id), enabled: !!id } });
   const { data: report } = useGetFinancierReport(id, { query: { queryKey: getGetFinancierReportQueryKey(id), enabled: !!id } });
+  const { data: latestRun } = useGetLatestRun(id, { query: { queryKey: getGetLatestRunQueryKey(id), enabled: !!id, retry: false } });
   const { data: documents } = useListDossierDocuments(id, { query: { queryKey: getListDossierDocumentsQueryKey(id), enabled: !!id } });
   const { data: memo } = useGetMemorandum(id, { query: { queryKey: getGetMemorandumQueryKey(id), enabled: !!id, retry: false } });
   const { data: partners } = useListPartners({ query: { queryKey: getListPartnersQueryKey() } });
@@ -254,6 +256,50 @@ export default function DossierDetail() {
             </div>
           ) : (
             <Card><CardContent className="py-10 text-center text-muted-foreground">Geen AI rapport beschikbaar voor dit dossier.</CardContent></Card>
+          )}
+
+          {latestRun && latestRun.skillInvocations && latestRun.skillInvocations.length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <Activity className="w-4 h-4" /> AI uitvoeringsdetails
+                </CardTitle>
+                <CardDescription>
+                  Per skill: provider, modus, model, duur en samenvatting van in- en output.
+                  {latestRun.usedMockMode ? ' Run draaide (deels) in mock-modus.' : ' Run gebruikte live AI providers.'}
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-3">
+                  {latestRun.skillInvocations.map((inv, idx) => (
+                    <div key={idx} className="border rounded-lg p-3 bg-muted/10">
+                      <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono text-sm font-semibold">{inv.skillName}</span>
+                          <span className={`text-xs px-2 py-0.5 rounded ${inv.usedMockMode ? 'bg-amber-100 text-amber-800' : 'bg-green-100 text-green-800'}`}>
+                            {inv.provider}
+                            {inv.usedMockMode ? ' (mock)' : ' (live)'}
+                          </span>
+                          {!inv.ok && (
+                            <span className="text-xs px-2 py-0.5 rounded bg-red-100 text-red-800">fout</span>
+                          )}
+                        </div>
+                        <span className="text-xs text-muted-foreground">{inv.durationMs} ms</span>
+                      </div>
+                      <dl className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-1 text-xs">
+                        {inv.model && (<><dt className="text-muted-foreground">Model</dt><dd className="font-mono">{inv.model}</dd></>)}
+                        {inv.endpoint && (<><dt className="text-muted-foreground">Endpoint</dt><dd className="font-mono truncate">{inv.endpoint}</dd></>)}
+                        {inv.assistantId && (<><dt className="text-muted-foreground">Assistant</dt><dd className="font-mono truncate">{inv.assistantId}</dd></>)}
+                        {inv.fallbackReason && (<><dt className="text-muted-foreground">Fallback</dt><dd className="text-amber-700">{inv.fallbackReason}</dd></>)}
+                        <dt className="text-muted-foreground">Input</dt><dd className="font-mono break-words">{inv.inputSummary || '—'}</dd>
+                        <dt className="text-muted-foreground">Output</dt><dd className="font-mono break-words">{inv.outputSummary || '—'}</dd>
+                        {inv.errorMessage && (<><dt className="text-muted-foreground">Foutmelding</dt><dd className="text-red-700">{inv.errorMessage}</dd></>)}
+                      </dl>
+                    </div>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
           )}
         </TabsContent>
 

@@ -201,6 +201,23 @@ export interface DocumentUpload {
   contentBase64?: string | null;
 }
 
+export interface SkillInvocation {
+  skillName: string;
+  provider: string;
+  usedMockMode: boolean;
+  fallbackReason?: string | null;
+  model?: string | null;
+  endpoint?: string | null;
+  assistantId?: string | null;
+  startedAt: string;
+  completedAt: string;
+  durationMs: number;
+  ok: boolean;
+  inputSummary: string;
+  outputSummary: string;
+  errorMessage?: string | null;
+}
+
 export interface AIAnalysisRun {
   id: string;
   dossierId: string;
@@ -209,6 +226,7 @@ export interface AIAnalysisRun {
   startedAt: string;
   completedAt?: string | null;
   skillModulesUsed: string[];
+  skillInvocations: SkillInvocation[];
   completenessScore?: number | null;
   correctnessScore?: number | null;
   viabilityScore?: number | null;
@@ -407,10 +425,31 @@ export interface ActivityLogEntry {
   createdAt: string;
 }
 
+export type AISkillsRuntimePerSkillItem = {
+  module: string;
+  provider: string;
+  usedMockMode: boolean;
+  fallbackReason?: string | null;
+  model?: string | null;
+  endpoint?: string | null;
+  assistantId?: string | null;
+  missingEnv: string[];
+};
+
+export interface AISkillsRuntime {
+  provider: string;
+  defaultProvider: string;
+  liveSkills: number;
+  mockSkills: number;
+  totalSkills: number;
+  perSkill: AISkillsRuntimePerSkillItem[];
+}
+
 export interface IntegrationStatus {
   name: string;
   live: boolean;
   message: string;
+  runtime?: AISkillsRuntime;
 }
 
 export interface IntegrationsStatus {

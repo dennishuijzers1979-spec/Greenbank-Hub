@@ -21,6 +21,7 @@ export const aiAnalysisRunsTable = pgTable("ai_analysis_runs", {
     .defaultNow(),
   completedAt: timestamp("completed_at", { withTimezone: true }),
   skillModulesUsed: jsonb("skill_modules_used").notNull().default([]),
+  skillInvocations: jsonb("skill_invocations").notNull().default([]),
   completenessScore: doublePrecision("completeness_score"),
   correctnessScore: doublePrecision("correctness_score"),
   viabilityScore: doublePrecision("viability_score"),

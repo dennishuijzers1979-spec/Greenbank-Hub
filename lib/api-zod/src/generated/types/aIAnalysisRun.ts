@@ -5,6 +5,7 @@
  * Geenbank Hub API
  * OpenAPI spec version: 0.1.0
  */
+import type { SkillInvocation } from "./skillInvocation";
 
 export interface AIAnalysisRun {
   id: string;
@@ -14,6 +15,7 @@ export interface AIAnalysisRun {
   startedAt: string;
   completedAt?: string | null;
   skillModulesUsed: string[];
+  skillInvocations: SkillInvocation[];
   completenessScore?: number | null;
   correctnessScore?: number | null;
   viabilityScore?: number | null;

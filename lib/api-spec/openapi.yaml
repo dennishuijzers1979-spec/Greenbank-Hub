@@ -871,6 +871,9 @@ components:
         skillModulesUsed:
           type: array
           items: { type: string }
+        skillInvocations:
+          type: array
+          items: { $ref: "#/components/schemas/SkillInvocation" }
         completenessScore: { type: number, nullable: true }
         correctnessScore: { type: number, nullable: true }
         viabilityScore: { type: number, nullable: true }
@@ -888,8 +891,37 @@ components:
         - status
         - startedAt
         - skillModulesUsed
+        - skillInvocations
         - usedMockMode
         - errors
+
+    SkillInvocation:
+      type: object
+      properties:
+        skillName: { type: string }
+        provider: { type: string }
+        usedMockMode: { type: boolean }
+        fallbackReason: { type: string, nullable: true }
+        model: { type: string, nullable: true }
+        endpoint: { type: string, nullable: true }
+        assistantId: { type: string, nullable: true }
+        startedAt: { type: string }
+        completedAt: { type: string }
+        durationMs: { type: integer }
+        ok: { type: boolean }
+        inputSummary: { type: string }
+        outputSummary: { type: string }
+        errorMessage: { type: string, nullable: true }
+      required:
+        - skillName
+        - provider
+        - usedMockMode
+        - startedAt
+        - completedAt
+        - durationMs
+        - ok
+        - inputSummary
+        - outputSummary
 
     EntrepreneurReport:
       type: object
@@ -1178,4 +1210,31 @@ components:
         name: { type: string }
         live: { type: boolean }
         message: { type: string }
+        runtime: { $ref: "#/components/schemas/AISkillsRuntime" }
       required: [name, live, message]
+
+    AISkillsRuntime:
+      type: object
+      properties:
+        provider: { type: string }
+        defaultProvider: { type: string }
+        liveSkills: { type: integer }
+        mockSkills: { type: integer }
+        totalSkills: { type: integer }
+        perSkill:
+          type: array
+          items:
+            type: object
+            properties:
+              module: { type: string }
+              provider: { type: string }
+              usedMockMode: { type: boolean }
+              fallbackReason: { type: string, nullable: true }
+              model: { type: string, nullable: true }
+              endpoint: { type: string, nullable: true }
+              assistantId: { type: string, nullable: true }
+              missingEnv:
+                type: array
+                items: { type: string }
+            required: [module, provider, usedMockMode, missingEnv]
+      required: [provider, defaultProvider, liveSkills, mockSkills, totalSkills, perSkill]

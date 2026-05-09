@@ -194,6 +194,8 @@ export function serializeRun(r: DbRun) {
     startedAt: isoReq(r.startedAt),
     completedAt: iso(r.completedAt),
     skillModulesUsed: (r.skillModulesUsed as string[] | null) ?? [],
+    skillInvocations:
+      (r.skillInvocations as Array<Record<string, unknown>> | null) ?? [],
     completenessScore: r.completenessScore,
     correctnessScore: r.correctnessScore,
     viabilityScore: r.viabilityScore,

@@ -1,4 +1,5 @@
 export * from "./types";
+export * from "./runtime";
 export { CreditProductAdvisorAdapter } from "./credit-product-advisor";
 export { FinancingNeedAssessorAdapter } from "./financing-need-assessor";
 export { FinancingProductAdvisorDualViewAdapter } from "./financing-product-advisor-dual-view";

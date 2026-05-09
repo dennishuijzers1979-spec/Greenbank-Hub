@@ -86,3 +86,52 @@ In mock-mode every call is logged through `pino` and skipped — no
 external request is made. The skill modules return deterministic
 sample output, which is enough to exercise the dossier gates and
 report rendering end-to-end.
+
+## AI skill invocation observability
+
+Every AI skill call now flows through a single runtime resolver
+(`src/lib/skills/runtime.ts`) that decides which provider to use
+(`mock` | `openai` | `http` | `replit`) and produces a structured
+`SkillInvocation` record. Records are:
+
+- attached to the `SkillResult` returned by every adapter,
+- persisted on the `ai_analysis_runs.skill_invocations` JSON column
+  for both staged runs and memorandum runs,
+- logged through `pino` (start + complete with provider, mock flag,
+  duration, error),
+- exposed to officers/admins on `GET /api/dossiers/:id/latest-run`
+  (and surfaced in the dossier "AI Analyse" tab as
+  *AI uitvoeringsdetails*),
+- summarised on `GET /api/integrations/status` so the admin
+  "Integraties" card shows per-skill provider/model + missing-env
+  hints.
+
+### Configuration
+
+Global default provider:
+
+| Variable | Effect |
+| --- | --- |
+| `AI_SKILL_PROVIDER` | Force the default provider (`mock`, `openai`, `http`, `replit`). |
+| `OPENAI_API_KEY` | Auto-detected; default provider becomes `openai`. |
+| `ANTHROPIC_API_KEY` / `AI_API_KEY` | Auto-detected; default becomes `replit`. |
+| `AI_SKILL_ENDPOINT` | Auto-detected; default becomes `http`. |
+| `OPENAI_MODEL`, `OPENAI_ASSISTANT_ID` | Default model / assistant for OpenAI. |
+
+Per-skill overrides — replace `<MODULE>` with one of
+`FINANCINGNEEDASSESSOR`, `CREDITPRODUCTADVISOR`,
+`FINANCINGPRODUCTADVISORDUALVIEW`, `GEENBANKKREDIETWORKFLOW`,
+`MONEYCAREKREDIETMEMORANDUM`:
+
+| Variable | Purpose |
+| --- | --- |
+| `AI_SKILL_<MODULE>_PROVIDER` | Override provider for this skill only. |
+| `AI_SKILL_<MODULE>_MODEL` | Override model name. |
+| `AI_SKILL_<MODULE>_ENDPOINT` | Override HTTP endpoint (when provider=`http`). |
+| `AI_SKILL_<MODULE>_ASSISTANT_ID` | Override OpenAI assistant id. |
+
+If the requested provider is missing its key/endpoint, the resolver
+records `fallbackReason` + `missingEnv` and silently falls back to
+`mock` so the dossier flow keeps working. Secrets themselves are
+never written to the DB or returned over the API — only the variable
+*name* that is missing.
