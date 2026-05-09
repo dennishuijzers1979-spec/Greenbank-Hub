@@ -5,6 +5,7 @@ import {
   getGetMyEntrepreneurReportQueryKey,
   useListMyDocuments, getListMyDocumentsQueryKey,
 } from "@workspace/api-client-react";
+import type { GateBlockedError } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -15,12 +16,31 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { AlertCircle, FileText, Upload, BrainCircuit, CheckCircle2, ArrowRight, Loader2, PlayCircle, Sparkles } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
-type AnalysisGateError = {
-  error?: string;
-  message?: string;
-  reasons?: string[];
-  actions?: string[];
-};
+/**
+ * Extracts the typed structured 409 payload (`GateBlockedError`) from a
+ * mutation error thrown by the generated API client. Both
+ * `useRunMyAnalysis` and `useSubmitMyDossier` declare their error type as
+ * `ErrorType<GateBlockedError>` in the generated client, so this helper
+ * keeps consumers honest about the shape.
+ */
+function extractGateError(err: unknown): {
+  status: number;
+  data: Partial<GateBlockedError>;
+} {
+  const status =
+    err && typeof err === "object" && "status" in err
+      ? Number((err as { status: unknown }).status) || 0
+      : 0;
+  const data =
+    err &&
+    typeof err === "object" &&
+    "data" in err &&
+    (err as { data: unknown }).data &&
+    typeof (err as { data: unknown }).data === "object"
+      ? ((err as { data: Partial<GateBlockedError> }).data ?? {})
+      : {};
+  return { status, data };
+}
 
 export default function DossierHub() {
   const { data: dossier, isLoading, isError } = useGetMyDossier({
@@ -73,21 +93,14 @@ export default function DossierHub() {
         });
       },
       onError: (err: unknown) => {
-        const data =
-          err && typeof err === "object" && "data" in err
-            ? ((err as { data: AnalysisGateError | null }).data ?? {})
-            : {};
-        const status =
-          err && typeof err === "object" && "status" in err
-            ? (err as { status: number }).status
-            : 0;
+        const { status, data } = extractGateError(err);
         if (status === 409) {
           toast({
             title: data.error ?? "AI-analyse geblokkeerd",
             description:
-              (data.reasons && data.reasons.join(" ")) ??
-              data.message ??
-              "Vul je dossier eerst aan.",
+              (data.reasons && data.reasons.length > 0
+                ? data.reasons.join(" ")
+                : data.message) ?? "Vul je dossier eerst aan.",
             variant: "destructive",
           });
         } else {
@@ -150,12 +163,24 @@ export default function DossierHub() {
           description: "Uw dossier is succesvol ingediend bij de kredietbeoordelaars.",
         });
       },
-      onError: (err) => {
-        toast({
-          title: "Fout bij indienen",
-          description: "Er is iets misgegaan. Probeer het later opnieuw.",
-          variant: "destructive"
-        });
+      onError: (err: unknown) => {
+        const { status, data } = extractGateError(err);
+        if (status === 409) {
+          toast({
+            title: data.error ?? "Dossier kan nog niet ingediend worden",
+            description:
+              (data.reasons && data.reasons.length > 0
+                ? data.reasons.join(" ")
+                : data.message) ?? "Vul je dossier eerst aan.",
+            variant: "destructive",
+          });
+        } else {
+          toast({
+            title: "Fout bij indienen",
+            description: "Er is iets misgegaan. Probeer het later opnieuw.",
+            variant: "destructive",
+          });
+        }
       }
     });
   };

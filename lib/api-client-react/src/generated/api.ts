@@ -32,6 +32,7 @@ import type {
   DownloadDocument404,
   EntrepreneurReport,
   FinancierReport,
+  GateBlockedError,
   HealthStatus,
   IntakeUpdate,
   IntegrationsStatus,
@@ -632,7 +633,7 @@ export const submitMyDossier = async (
 };
 
 export const getSubmitMyDossierMutationOptions = <
-  TError = ErrorType<unknown>,
+  TError = ErrorType<GateBlockedError>,
   TContext = unknown,
 >(options?: {
   mutation?: UseMutationOptions<
@@ -671,13 +672,13 @@ export type SubmitMyDossierMutationResult = NonNullable<
   Awaited<ReturnType<typeof submitMyDossier>>
 >;
 
-export type SubmitMyDossierMutationError = ErrorType<unknown>;
+export type SubmitMyDossierMutationError = ErrorType<GateBlockedError>;
 
 /**
  * @summary Submit dossier to Geenbank for loan officer review
  */
 export const useSubmitMyDossier = <
-  TError = ErrorType<unknown>,
+  TError = ErrorType<GateBlockedError>,
   TContext = unknown,
 >(options?: {
   mutation?: UseMutationOptions<
@@ -1485,7 +1486,7 @@ export const runMyAnalysis = async (
 };
 
 export const getRunMyAnalysisMutationOptions = <
-  TError = ErrorType<unknown>,
+  TError = ErrorType<GateBlockedError>,
   TContext = unknown,
 >(options?: {
   mutation?: UseMutationOptions<
@@ -1524,13 +1525,13 @@ export type RunMyAnalysisMutationResult = NonNullable<
   Awaited<ReturnType<typeof runMyAnalysis>>
 >;
 
-export type RunMyAnalysisMutationError = ErrorType<unknown>;
+export type RunMyAnalysisMutationError = ErrorType<GateBlockedError>;
 
 /**
  * @summary Trigger full AI analysis for the prospect's dossier
  */
 export const useRunMyAnalysis = <
-  TError = ErrorType<unknown>,
+  TError = ErrorType<GateBlockedError>,
   TContext = unknown,
 >(options?: {
   mutation?: UseMutationOptions<
