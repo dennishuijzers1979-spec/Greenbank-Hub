@@ -135,3 +135,41 @@ records `fallbackReason` + `missingEnv` and silently falls back to
 `mock` so the dossier flow keeps working. Secrets themselves are
 never written to the DB or returned over the API — only the variable
 *name* that is missing.
+
+## Connecting real ChatGPT skills
+
+The five adapters currently run in deterministic mock-mode. The plan
+for moving to the real ChatGPT Business "Vaardigheden" lives in
+[`docs/ai-skill-source-mapping.md`](../../docs/ai-skill-source-mapping.md),
+and the per-skill instruction placeholders live under
+[`skills/<skill-name>/SKILL.md`](../../skills) at the repo root.
+
+To go from mock to real for a single skill (worked example: the
+financing-need assessor):
+
+1. Open ChatGPT Business → *Vaardigheden* → `financing-need-assessor`
+   and copy the full instruction text + JSON output contract.
+2. Paste both into `skills/financing-need-assessor/SKILL.md` below the
+   marker line (no API keys, no secrets).
+3. In Replit *Secrets* set:
+   * `OPENAI_API_KEY` (global, shared across all real skills), and
+   * `AI_SKILL_FINANCINGNEEDASSESSOR_ASSISTANT_ID` (or
+     `AI_SKILL_FINANCINGNEEDASSESSOR_PROVIDER=openai` plus the model
+     of your choice).
+4. Implement the real call inside the existing
+   `instrumentSkill(MODULE, ctx, …)` callback in the adapter — keep
+   the function signature and the returned `data`/`outputSummary`
+   shape unchanged so the orchestrator and the *AI uitvoeringsdetails*
+   panel keep working.
+5. Reload the workspace, open a dossier, and confirm under *AI
+   Analyse → AI uitvoeringsdetails* that the row for this skill now
+   shows provider `openai (live)` instead of `mock (live)`. The admin
+   *Integraties* card shows the same per-skill breakdown.
+
+To roll back safely: remove the relevant env var. The runtime
+resolver will fall back to `mock` automatically and record the reason
+in every persisted `SkillInvocation`. No code change required.
+
+Use `node scripts/check-skill-packs.mjs` to verify that all five
+skill folders exist, no plain-text secrets slipped into a SKILL.md,
+and the runtime still defaults to mock when no AI env vars are set.
