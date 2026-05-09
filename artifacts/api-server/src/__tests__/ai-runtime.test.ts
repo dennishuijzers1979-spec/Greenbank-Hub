@@ -226,6 +226,70 @@ test("runtime resolver falls back to mock when openai is requested without key",
   }
 });
 
+test("OPENAI_API_KEY alone does NOT auto-promote skills to live (honesty rule)", () => {
+  const originals = {
+    AI_SKILL_PROVIDER: process.env.AI_SKILL_PROVIDER,
+    OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+    ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+    AI_API_KEY: process.env.AI_API_KEY,
+    AI_SKILL_ENDPOINT: process.env.AI_SKILL_ENDPOINT,
+    [DUAL_PROVIDER_ENV]: process.env[DUAL_PROVIDER_ENV],
+  };
+  delete process.env.AI_SKILL_PROVIDER;
+  delete process.env.ANTHROPIC_API_KEY;
+  delete process.env.AI_API_KEY;
+  delete process.env.AI_SKILL_ENDPOINT;
+  delete process.env[DUAL_PROVIDER_ENV];
+  process.env.OPENAI_API_KEY = "sk-test-fake-1234567890";
+  try {
+    // Every skill — including the dual-view one without its per-skill
+    // PROVIDER opt-in — must report mock honestly.
+    for (const m of SKILL_MODULES) {
+      const cfg = resolveSkillRuntime(m);
+      assert.equal(cfg.provider, "mock", `${m} should default to mock`);
+      assert.equal(cfg.usedMockMode, true, `${m} should be mock`);
+      assert.equal(cfg.fallbackReason, null);
+    }
+    const status = describeAiRuntime(SKILL_MODULES);
+    assert.equal(status.defaultProvider, "mock");
+    assert.equal(status.liveSkills, 0);
+    assert.equal(status.mockSkills, SKILL_MODULES.length);
+  } finally {
+    for (const [k, v] of Object.entries(originals)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  }
+});
+
+test("only the per-skill PROVIDER override promotes a single skill to live (configured-provider parity)", () => {
+  const originals = {
+    AI_SKILL_PROVIDER: process.env.AI_SKILL_PROVIDER,
+    OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+    [DUAL_PROVIDER_ENV]: process.env[DUAL_PROVIDER_ENV],
+  };
+  delete process.env.AI_SKILL_PROVIDER;
+  process.env.OPENAI_API_KEY = "sk-test-fake-1234567890";
+  process.env[DUAL_PROVIDER_ENV] = "openai";
+  try {
+    const dual = resolveSkillRuntime("FinancingProductAdvisorDualView");
+    assert.equal(dual.provider, "openai");
+    assert.equal(dual.usedMockMode, false);
+    for (const m of SKILL_MODULES.filter(
+      (x) => x !== "FinancingProductAdvisorDualView",
+    )) {
+      const cfg = resolveSkillRuntime(m);
+      assert.equal(cfg.provider, "mock", `${m} must stay mock`);
+      assert.equal(cfg.usedMockMode, true);
+    }
+  } finally {
+    for (const [k, v] of Object.entries(originals)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  }
+});
+
 test("describeAiRuntime returns one entry per known skill module", () => {
   const status = describeAiRuntime(SKILL_MODULES);
   assert.equal(status.totalSkills, SKILL_MODULES.length);

@@ -1,0 +1,132 @@
+Preserve baseline behavior from commit fe508256ddd40df21c2df412f5dae18c8ad17236.
+
+Runtime state:
+- FinancingProductAdvisorDualView has a working live OpenAI pilot.
+- The other four adapters are still deterministic/mock.
+- Do not enable new live skills in this task.
+- Do not change central gate logic.
+- Do not surface rich dual-view output in reports yet.
+
+Task: Fix AI runtime honesty and prepare pipeline context for proper skill chaining.
+
+Context:
+The live OpenAI pilot proved that FinancingProductAdvisorDualView can call OpenAI successfully. However, this skill is normally not meant to run in isolation. The intended AI pipeline is:
+
+1. GeenbankKredietworkflow ingests the full dossier and creates the credit workflow/report context.
+2. FinancingProductAdvisorDualView and FinancingNeedAssessor use that enriched context to match:
+   - entrepreneur financing need
+   - suitable financing product
+   - financier possibilities
+3. MoneycareKredietmemorandum formats the resulting input into a partner-specific standardized credit memorandum.
+
+Current issue:
+The AI uitvoeringsdetails UI shows all five skills as openai/live, but only FinancingProductAdvisorDualView actually made a real OpenAI network call. The other four are still deterministic and should not be labeled as live AI.
+
+Goal:
+Make AI execution labels truthful and prepare the orchestrator data shape for chained/enriched context, without changing gate behavior and without enabling more live calls yet.
+
+1. Fix runtime/invocation honesty
+
+Update the AI runtime/instrumentation so:
+- an adapter can only report usedMockMode=false if it actually performed a real external/provider call
+- deterministic adapters must report usedMockMode=true or provider=mock/deterministic even when OPENAI_API_KEY exists
+- provider=openai should not automatically imply live execution
+- durationMs=0 deterministic rows must not display as live OpenAI calls
+
+Preferred UI labels:
+- "Live OpenAI" only for actual external OpenAI calls
+- "Deterministisch / mock" for local deterministic adapters
+- "Fallback naar mock" when OpenAI was attempted but failed
+
+2. Fix Admin Integraties and AI uitvoeringsdetails labels
+
+Update internal UI copy so it does not overstate AI usage.
+
+For a mixed run, show something like:
+- "1 skill draaide live via OpenAI; 4 skills draaiden deterministisch/mock."
+
+Per row show:
+- skill name
+- execution mode: live OpenAI / deterministic mock / fallback mock
+- provider config if relevant
+- model only when a real model was called or attempted
+- duration
+- fallback reason
+
+3. Add tests for runtime honesty
+
+Add or update tests proving:
+- OpenAI API key alone does not make all skills live
+- only FinancingProductAdvisorDualView reports live when its provider env is set and the call succeeds
+- deterministic adapters remain mock/deterministic
+- attempted OpenAI failure reports fallback mock
+- no secrets leak in metadata
+
+4. Add Dutch language directive to the imported dual-view skill
+
+Update:
+skills/financing-product-advisor-dual-view/SKILL.md
+
+Add a repo integration note or instruction:
+- all human-readable free-text fields must be Dutch, Netherlands Dutch
+- keep enum/machine values exactly as specified
+- product names may stay canonical if needed, but explanatory text, risks, rationale, gaps, notes, conditions and structure logic must be Dutch
+
+Do not change the JSON schema shape.
+
+5. Prepare pipeline context shape, but do not wire more live calls yet
+
+Document or add types for future enriched context passed into FinancingProductAdvisorDualView:
+- normalized dossier data
+- document completeness/correctness findings
+- output from GeenbankKredietworkflow
+- financing need assessment
+- extracted financials
+- blocking and non-blocking conditions
+
+Do not make this required yet.
+Do not break current mock or live pilot.
+This is preparation so the dual-view skill can later receive upstream workflow context.
+
+6. Do not change scoring/gating
+
+Do not change:
+- checkRunAnalysisGate
+- viabilityScore mapping
+- margin/dscr/revenue/profit/requested derivation
+- submit gate
+- officer visibility
+- RBAC
+
+7. README update
+
+Document:
+- difference between configured provider and actual execution mode
+- how to interpret AI uitvoeringsdetails
+- current state: only FinancingProductAdvisorDualView has live OpenAI implementation
+- intended future skill chain order
+
+8. Run checks
+
+Run:
+pnpm --filter @workspace/api-server run test
+pnpm run typecheck
+pnpm run build
+node scripts/check-skill-packs.mjs
+
+9. Commit and push
+
+Commit with:
+
+Geenbank Hub: clarify AI execution modes and skill chain context
+
+10. Report back
+
+Report:
+- changed files
+- test/typecheck/build output
+- how labels changed in AI uitvoeringsdetails
+- proof that only the dual-view adapter reports live OpenAI
+- what pipeline context shape was prepared
+- whether gate behavior stayed unchanged
+- remaining risks

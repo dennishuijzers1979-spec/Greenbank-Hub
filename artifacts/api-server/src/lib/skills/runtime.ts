@@ -57,13 +57,24 @@ function readProvider(value: string | undefined): SkillProvider | null {
   return VALID_PROVIDERS.has(v as SkillProvider) ? (v as SkillProvider) : null;
 }
 
+/**
+ * Resolve the *global default* provider. Only an explicit
+ * `AI_SKILL_PROVIDER=openai|http|replit` opts every skill into a live
+ * path; the mere presence of `OPENAI_API_KEY` (or any other secret)
+ * does NOT auto-promote skills to live execution. Per-skill opt-in
+ * (`AI_SKILL_<MODULE>_PROVIDER`) remains the only safe way to enable a
+ * single live adapter.
+ *
+ * Rationale: of the five adapters, only
+ * `FinancingProductAdvisorDualView` has a real OpenAI implementation.
+ * Auto-promoting the other four to `provider=openai` made the AI
+ * uitvoeringsdetails panel and the admin Integraties card claim "live"
+ * for skills that still ran deterministic mock code. The default now
+ * stays honest: `mock`, unless an operator explicitly opts in.
+ */
 function detectGlobalProvider(): SkillProvider {
   const explicit = readProvider(process.env.AI_SKILL_PROVIDER);
   if (explicit) return explicit;
-  if (process.env.OPENAI_API_KEY) return "openai";
-  if (process.env.ANTHROPIC_API_KEY) return "replit";
-  if (process.env.AI_SKILL_ENDPOINT) return "http";
-  if (process.env.AI_API_KEY) return "replit";
   return "mock";
 }
 
@@ -173,6 +184,35 @@ export function describeAiRuntime(modules: readonly SkillModule[]): RuntimeStatu
     totalSkills: perSkill.length,
     perSkill,
   };
+}
+
+/**
+ * Defensive, generic secret scrubber applied to every persisted
+ * `SkillInvocation` (notably `extras`, `inputSummary`, `outputSummary`,
+ * and `errorMessage`). Adapters are still expected to scrub at their
+ * own level — this is a secondary safety net so a future adapter that
+ * forgets cannot leak `sk-…` style keys, bearer tokens, or `api_key`
+ * fields into the DB or the UI.
+ */
+const SECRET_KEY_FIELD_RE = /^(api[_-]?key|authorization|bearer|access[_-]?token|client[_-]?secret)$/i;
+const SECRET_STRING_RE = /sk-[A-Za-z0-9_-]{10,}/g;
+
+export function scrubSecrets<T>(value: T): T {
+  if (typeof value === "string") {
+    return value.replace(SECRET_STRING_RE, "sk-***") as unknown as T;
+  }
+  if (Array.isArray(value)) {
+    return value.map((v) => scrubSecrets(v)) as unknown as T;
+  }
+  if (value && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      if (SECRET_KEY_FIELD_RE.test(k)) continue;
+      out[k] = scrubSecrets(v);
+    }
+    return out as unknown as T;
+  }
+  return value;
 }
 
 /** Truncate long strings for safe persistence/log. */
@@ -320,7 +360,7 @@ function buildInvocation(args: {
     skillName: args.cfg.module,
     provider: args.cfg.provider,
     usedMockMode,
-    fallbackReason,
+    fallbackReason: fallbackReason ? scrubSecrets(fallbackReason) : null,
     model: usedMockMode && args.modelOverride === undefined ? null : model,
     endpoint: args.cfg.endpoint,
     assistantId: args.cfg.assistantId,
@@ -328,10 +368,10 @@ function buildInvocation(args: {
     completedAt: completedAt.toISOString(),
     durationMs: completedAt.getTime() - args.startedAt.getTime(),
     ok: args.ok,
-    inputSummary: summarize(args.inputSummary),
-    outputSummary: summarize(args.outputSummary),
-    errorMessage: args.errorMessage,
-    extras: args.extras ?? null,
+    inputSummary: scrubSecrets(summarize(args.inputSummary)),
+    outputSummary: scrubSecrets(summarize(args.outputSummary)),
+    errorMessage: args.errorMessage ? scrubSecrets(args.errorMessage) : null,
+    extras: args.extras ? scrubSecrets(args.extras) : null,
   };
 }
 

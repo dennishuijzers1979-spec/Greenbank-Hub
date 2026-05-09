@@ -265,20 +265,35 @@ export default function DossierDetail() {
                   <Activity className="w-4 h-4" /> AI uitvoeringsdetails
                 </CardTitle>
                 <CardDescription>
-                  Per skill: provider, modus, model, duur en samenvatting van in- en output.
-                  {latestRun.usedMockMode ? ' Run draaide (deels) in mock-modus.' : ' Run gebruikte live AI providers.'}
+                  Per skill tonen we de daadwerkelijke uitvoeringsmodus: <strong>Live OpenAI</strong> (echte API-aanroep gelukt),
+                  {' '}<strong>Fallback naar mock</strong> (live geprobeerd, mislukt — zie reden) of <strong>Deterministisch / mock</strong>
+                  {' '}(geen live aanroep gedaan). Vandaag heeft alleen <span className="font-mono">FinancingProductAdvisorDualView</span> een
+                  {' '}live-pad; de overige skills draaien deterministisch.
                 </CardDescription>
               </CardHeader>
               <CardContent>
                 <div className="space-y-3">
-                  {latestRun.skillInvocations.map((inv, idx) => (
+                  {latestRun.skillInvocations.map((inv, idx) => {
+                    const isLive = !inv.usedMockMode;
+                    const isFallback = inv.usedMockMode && !!inv.fallbackReason;
+                    const modeLabel = isLive
+                      ? `Live ${inv.provider === 'openai' ? 'OpenAI' : inv.provider}`
+                      : isFallback
+                        ? 'Fallback naar mock'
+                        : 'Deterministisch / mock';
+                    const badgeClass = isLive
+                      ? 'bg-green-100 text-green-800'
+                      : isFallback
+                        ? 'bg-amber-100 text-amber-800'
+                        : 'bg-slate-100 text-slate-700';
+                    const showModel = !!inv.model && (isLive || isFallback);
+                    return (
                     <div key={idx} className="border rounded-lg p-3 bg-muted/10">
                       <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
                         <div className="flex items-center gap-2">
                           <span className="font-mono text-sm font-semibold">{inv.skillName}</span>
-                          <span className={`text-xs px-2 py-0.5 rounded ${inv.usedMockMode ? 'bg-amber-100 text-amber-800' : 'bg-green-100 text-green-800'}`}>
-                            {inv.provider}
-                            {inv.usedMockMode ? ' (mock)' : ' (live)'}
+                          <span className={`text-xs px-2 py-0.5 rounded ${badgeClass}`}>
+                            {modeLabel}
                           </span>
                           {!inv.ok && (
                             <span className="text-xs px-2 py-0.5 rounded bg-red-100 text-red-800">fout</span>
@@ -287,7 +302,7 @@ export default function DossierDetail() {
                         <span className="text-xs text-muted-foreground">{inv.durationMs} ms</span>
                       </div>
                       <dl className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-1 text-xs">
-                        {inv.model && (<><dt className="text-muted-foreground">Model</dt><dd className="font-mono">{inv.model}</dd></>)}
+                        {showModel && (<><dt className="text-muted-foreground">Model</dt><dd className="font-mono">{inv.model}</dd></>)}
                         {inv.endpoint && (<><dt className="text-muted-foreground">Endpoint</dt><dd className="font-mono truncate">{inv.endpoint}</dd></>)}
                         {inv.assistantId && (<><dt className="text-muted-foreground">Assistant</dt><dd className="font-mono truncate">{inv.assistantId}</dd></>)}
                         {inv.fallbackReason && (<><dt className="text-muted-foreground">Fallback</dt><dd className="text-amber-700">{inv.fallbackReason}</dd></>)}
@@ -296,7 +311,8 @@ export default function DossierDetail() {
                         {inv.errorMessage && (<><dt className="text-muted-foreground">Foutmelding</dt><dd className="text-red-700">{inv.errorMessage}</dd></>)}
                       </dl>
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </CardContent>
             </Card>

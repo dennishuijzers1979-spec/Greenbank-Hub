@@ -77,7 +77,7 @@ admin "Integraties" view via `aiSkillsStatus`, `pipedriveStatus`,
 
 | Subsystem | Mock-mode trigger | Live trigger |
 | --- | --- | --- |
-| AI skills (FinancingNeedAssessor, CreditProductAdvisor, FinancingProductAdvisorDualView, GeenbankKredietworkflow, MoneycareKredietmemorandum) | none of `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `AI_API_KEY` set | any of those keys set |
+| AI skills (FinancingNeedAssessor, CreditProductAdvisor, FinancingProductAdvisorDualView, GeenbankKredietworkflow, MoneycareKredietmemorandum) | default — only the per-skill `AI_SKILL_<MODULE>_PROVIDER=openai` opts a single adapter into a live path | per-skill `AI_SKILL_<MODULE>_PROVIDER=openai` **plus** the matching credentials (e.g. `OPENAI_API_KEY`). Today only `FinancingProductAdvisorDualView` has a live OpenAI implementation; the other four ignore the live opt-in and continue to run deterministic mock code. |
 | Pipedrive deal updates | `PIPEDRIVE_API_TOKEN` unset | `PIPEDRIVE_API_TOKEN` set |
 | Outbound email (`sendEmail`) | `SENDGRID_API_KEY` unset | `SENDGRID_API_KEY` set |
 | Document storage | neither `PUBLIC_OBJECT_SEARCH_PATHS` nor `PRIVATE_OBJECT_DIR` set | either set (App Storage) |
@@ -108,14 +108,24 @@ Every AI skill call now flows through a single runtime resolver
 
 ### Configuration
 
+**Configured provider vs actual execution mode.** The runtime resolver
+distinguishes the *configured* provider (what the env vars ask for) from
+the *actual execution mode* recorded on each `SkillInvocation`. Setting
+`OPENAI_API_KEY` does **not** by itself promote any skill to live —
+that secret is only consumed when an adapter has been explicitly
+opted in via its per-skill `AI_SKILL_<MODULE>_PROVIDER=openai`. This
+keeps the AI uitvoeringsdetails panel and the admin Integraties card
+honest: every row reports what truly ran (`Live OpenAI`,
+`Fallback naar mock`, or `Deterministisch / mock`).
+
 Global default provider:
 
 | Variable | Effect |
 | --- | --- |
-| `AI_SKILL_PROVIDER` | Force the default provider (`mock`, `openai`, `http`, `replit`). |
-| `OPENAI_API_KEY` | Auto-detected; default provider becomes `openai`. |
-| `ANTHROPIC_API_KEY` / `AI_API_KEY` | Auto-detected; default becomes `replit`. |
-| `AI_SKILL_ENDPOINT` | Auto-detected; default becomes `http`. |
+| `AI_SKILL_PROVIDER` | Force the default provider for **all** skills (`mock`, `openai`, `http`, `replit`). Mostly useful for staging. Defaults to `mock`. |
+| `OPENAI_API_KEY` | Credential consumed by adapters whose per-skill PROVIDER is `openai`. Presence alone does NOT change the default provider. |
+| `ANTHROPIC_API_KEY` / `AI_API_KEY` | Credentials consumed by adapters whose per-skill PROVIDER is `replit`. Presence alone does NOT change the default provider. |
+| `AI_SKILL_ENDPOINT` | Endpoint consumed by adapters whose per-skill PROVIDER is `http`. Presence alone does NOT change the default provider. |
 | `OPENAI_MODEL`, `OPENAI_ASSISTANT_ID` | Default model / assistant for OpenAI. |
 
 Per-skill overrides — replace `<MODULE>` with one of
@@ -135,6 +145,24 @@ records `fallbackReason` + `missingEnv` and silently falls back to
 `mock` so the dossier flow keeps working. Secrets themselves are
 never written to the DB or returned over the API — only the variable
 *name* that is missing.
+
+### Intended skill chain order
+
+When the remaining adapters move from deterministic mock to live, the
+orchestrator will call them in this order, threading a typed
+`PipelineContext` (see `src/lib/skills/types.ts`) through the chain:
+
+1. `GeenbankKredietworkflow` — produces the workflow analysis.
+2. `FinancingNeedAssessor` — runs alongside the dual-view advisor,
+   both consume the workflow output.
+3. `FinancingProductAdvisorDualView` — produces entrepreneur + partner
+   views; today the only adapter with a live OpenAI implementation.
+4. `MoneycareKredietmemorandum` — consumes the previous three to build
+   the financier-facing memorandum.
+
+`PipelineContext` is currently a types-only forward contract — adapters
+are not yet wired to consume it, but new live adapters should accept it
+to avoid further schema churn.
 
 ## Connecting real ChatGPT skills
 

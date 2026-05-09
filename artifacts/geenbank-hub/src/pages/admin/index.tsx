@@ -103,14 +103,26 @@ export default function AdminDashboard() {
                 {status.runtime && status.runtime.perSkill && status.runtime.perSkill.length > 0 && (
                   <div className="mt-3 border-t pt-2 space-y-1">
                     <p className="text-[11px] text-muted-foreground uppercase tracking-wide">Skills ({status.runtime.liveSkills} live / {status.runtime.totalSkills} totaal)</p>
-                    {status.runtime.perSkill.map((s) => (
-                      <div key={s.module} className="flex items-center justify-between text-xs gap-2">
-                        <span className="font-mono truncate">{s.module}</span>
-                        <span className={`px-1.5 py-0.5 rounded text-[10px] ${s.usedMockMode ? 'bg-amber-100 text-amber-800' : 'bg-green-100 text-green-800'}`}>
-                          {s.provider}{s.model ? ` · ${s.model}` : ''}
-                        </span>
-                      </div>
-                    ))}
+                    {status.runtime.perSkill.map((s) => {
+                      const isLive = !s.usedMockMode;
+                      const isFallback = s.usedMockMode && !!s.fallbackReason;
+                      const label = isLive
+                        ? `Live ${s.provider === 'openai' ? 'OpenAI' : s.provider}${s.model ? ` · ${s.model}` : ''}`
+                        : isFallback
+                          ? 'Fallback naar mock'
+                          : 'Deterministisch / mock';
+                      const cls = isLive
+                        ? 'bg-green-100 text-green-800'
+                        : isFallback
+                          ? 'bg-amber-100 text-amber-800'
+                          : 'bg-slate-100 text-slate-700';
+                      return (
+                        <div key={s.module} className="flex items-center justify-between text-xs gap-2">
+                          <span className="font-mono truncate">{s.module}</span>
+                          <span className={`px-1.5 py-0.5 rounded text-[10px] ${cls}`}>{label}</span>
+                        </div>
+                      );
+                    })}
                     {status.runtime.perSkill.some((s) => s.fallbackReason) && (
                       <p className="text-[11px] text-amber-700 mt-1">
                         Een of meer skills vielen terug op mock — controleer ontbrekende variabelen.
