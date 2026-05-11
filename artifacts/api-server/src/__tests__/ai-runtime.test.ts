@@ -2069,6 +2069,247 @@ test("normalizeKredietworkflowFinancierPayload: unrelated invalid fields still f
   assert.ok(problem && /decision/i.test(problem));
 });
 
+// --- riskAnalysis.summary normalization (live OpenAI shape) -------------
+//
+// These tests exercise the pure riskAnalysis-summary normalizer used
+// by the live kredietworkflow adapter BEFORE schema validation. They
+// never call real OpenAI. They guard against four regressions:
+//   1. an existing valid summary is NEVER overwritten,
+//   2. missing/empty summary WITH supporting risk evidence
+//      (keyRisks/mitigants/assumptions/stressCase) derives a concise
+//      Dutch summary,
+//   3. missing/empty summary WITHOUT any evidence still triggers
+//      validation failure (we refuse to invent content),
+//   4. derived summary contains content traceable to the source
+//      fields — no hollow / placeholder text.
+
+test("normalizeKredietworkflowFinancierPayload: valid riskAnalysis.summary passes through unchanged", () => {
+  const sample = buildFinancierSample();
+  const before = sample.riskAnalysis.summary;
+  normalizeKredietworkflowFinancierPayload(sample);
+  assert.equal(sample.riskAnalysis.summary, before);
+  assert.equal(validateGeenbankKredietworkflowFinancierJson(sample), null);
+});
+
+test("normalizeKredietworkflowFinancierPayload: missing summary with keyRisks+mitigants derives Dutch summary", () => {
+  const sample = buildFinancierSample();
+  (sample.riskAnalysis as unknown as { summary: unknown }).summary = undefined;
+  normalizeKredietworkflowFinancierPayload(sample);
+  const s = sample.riskAnalysis.summary;
+  assert.ok(typeof s === "string" && s.length > 0, `summary should be derived, got ${s}`);
+  // Must reference the source evidence — not invented content.
+  assert.match(s, /Belangrijkste risico's:/);
+  assert.match(s, /Mitigerende maatregelen:/);
+  assert.match(s, /Klantconcentratie/);
+  assert.match(s, /Meerjarig contract/);
+  // Validator now passes.
+  assert.equal(validateGeenbankKredietworkflowFinancierJson(sample), null);
+});
+
+test("normalizeKredietworkflowFinancierPayload: empty-string summary with risk evidence derives summary", () => {
+  const sample = buildFinancierSample();
+  sample.riskAnalysis.summary = "";
+  normalizeKredietworkflowFinancierPayload(sample);
+  const s = sample.riskAnalysis.summary;
+  assert.ok(typeof s === "string" && s.trim().length > 0);
+  assert.match(s, /Belangrijkste risico's:/);
+  assert.equal(validateGeenbankKredietworkflowFinancierJson(sample), null);
+});
+
+test("normalizeKredietworkflowFinancierPayload: whitespace-only summary with evidence derives summary", () => {
+  const sample = buildFinancierSample();
+  sample.riskAnalysis.summary = "   \n  ";
+  normalizeKredietworkflowFinancierPayload(sample);
+  assert.match(sample.riskAnalysis.summary, /Belangrijkste risico's:/);
+  assert.equal(validateGeenbankKredietworkflowFinancierJson(sample), null);
+});
+
+test("normalizeKredietworkflowFinancierPayload: null summary with stressCase only still derives summary", () => {
+  const sample = buildFinancierSample();
+  (sample.riskAnalysis as unknown as { summary: unknown }).summary = null;
+  sample.riskAnalysis.keyRisks = [];
+  sample.riskAnalysis.mitigants = [];
+  sample.riskAnalysis.assumptions = [];
+  // stressCase is the only remaining evidence.
+  normalizeKredietworkflowFinancierPayload(sample);
+  const s = sample.riskAnalysis.summary;
+  assert.ok(typeof s === "string" && s.length > 0);
+  assert.match(s, /Stresstest:/);
+  assert.equal(validateGeenbankKredietworkflowFinancierJson(sample), null);
+});
+
+test("normalizeKredietworkflowFinancierPayload: missing summary AND no risk evidence still fails validation (no invented content)", () => {
+  const sample = buildFinancierSample();
+  (sample.riskAnalysis as unknown as { summary: unknown }).summary = "";
+  sample.riskAnalysis.keyRisks = [];
+  sample.riskAnalysis.mitigants = [];
+  sample.riskAnalysis.assumptions = [];
+  (sample.riskAnalysis as unknown as { stressCase: unknown }).stressCase = null;
+  normalizeKredietworkflowFinancierPayload(sample);
+  // Summary must NOT have been invented.
+  assert.equal(sample.riskAnalysis.summary, "");
+  const problem = validateGeenbankKredietworkflowFinancierJson(sample);
+  assert.ok(problem && /riskAnalysis\.summary/i.test(problem));
+});
+
+test("normalizeKredietworkflowFinancierPayload: existing valid summary is NEVER overwritten even if other evidence exists", () => {
+  const sample = buildFinancierSample();
+  const original = "Een door de officer goedgekeurde samenvatting met specifieke nuance.";
+  sample.riskAnalysis.summary = original;
+  // Plenty of evidence is present — must still be ignored.
+  normalizeKredietworkflowFinancierPayload(sample);
+  assert.equal(sample.riskAnalysis.summary, original);
+});
+
+test("normalizeKredietworkflowFinancierPayload: derived summary only restates source evidence, never invents content", () => {
+  const sample = buildFinancierSample();
+  (sample.riskAnalysis as unknown as { summary: unknown }).summary = undefined;
+  sample.riskAnalysis.keyRisks = ["Specifiek risico Alfa"];
+  sample.riskAnalysis.mitigants = ["Specifieke mitigant Bravo"];
+  sample.riskAnalysis.assumptions = ["Specifieke aanname Charlie"];
+  (sample.riskAnalysis as unknown as { stressCase: unknown }).stressCase =
+    "Specifieke stresstest Delta";
+  normalizeKredietworkflowFinancierPayload(sample);
+  const s = sample.riskAnalysis.summary;
+  for (const token of [
+    "Specifiek risico Alfa",
+    "Specifieke mitigant Bravo",
+    "Specifieke aanname Charlie",
+    "Specifieke stresstest Delta",
+  ]) {
+    assert.ok(s.includes(token), `derived summary missing token "${token}": ${s}`);
+  }
+  // Must not contain hollow filler we never asked for.
+  assert.ok(!/geen risico/i.test(s), `derived summary must not invent "geen risico" text: ${s}`);
+});
+
+test("normalizeKredietworkflowFinancierPayload: rate normalization still works alongside summary normalization", () => {
+  const sample = buildFinancierSample();
+  // Trigger BOTH normalizations in the same payload.
+  (sample.requestedStructure as unknown as { rate: unknown }).rate = "8.5%";
+  (sample.recommendedStructure as unknown as { rate: unknown }).rate = "marktconform";
+  (sample.riskAnalysis as unknown as { summary: unknown }).summary = "";
+  normalizeKredietworkflowFinancierPayload(sample);
+  // Rate normalization unaffected.
+  assert.equal(sample.requestedStructure.rate, 8.5);
+  assert.equal(sample.recommendedStructure.rate, null);
+  assert.equal(sample.recommendedStructure.rateComment, "marktconform");
+  // Summary derived from existing evidence.
+  assert.match(sample.riskAnalysis.summary, /Belangrijkste risico's:/);
+  assert.equal(validateGeenbankKredietworkflowFinancierJson(sample), null);
+});
+
+test("kredietworkflow adapter: live OpenAI returning empty riskAnalysis.summary with evidence is normalized + accepted (no fallback)", async () => {
+  const { dossierId } = await createDossier();
+  const [dossier] = await db
+    .select()
+    .from(dossiersTable)
+    .where(inArray(dossiersTable.id, [dossierId]));
+  const liveResponse = buildFinancierSample();
+  // Reproduce the exact production failure mode: empty summary,
+  // but useful supporting evidence is present.
+  (liveResponse.riskAnalysis as unknown as { summary: unknown }).summary = "";
+  setOpenAIChatClientForTesting(
+    makeFakeOpenAI(() => ({
+      content: JSON.stringify(liveResponse),
+      model: "gpt-4o-mini",
+    })),
+  );
+  try {
+    await withKwEnv(
+      { [KW_PROVIDER_ENV]: "openai", OPENAI_API_KEY: "sk-test-fake-1234567890" },
+      async () => {
+        const r = await GeenbankKredietworkflowAdapter.run(buildKwArgs(dossier));
+        assert.equal(r.ok, true);
+        assert.equal(r.usedMockMode, false);
+        assert.equal(r.invocation.fallbackReason, null);
+        const extras = r.invocation.extras as
+          | { canonical?: GeenbankKredietworkflowFinancierOutput }
+          | null;
+        assert.ok(extras?.canonical, "extras.canonical must be populated on live success");
+        assert.match(
+          extras!.canonical!.riskAnalysis.summary,
+          /Belangrijkste risico's:/,
+        );
+      },
+    );
+  } finally {
+    setOpenAIChatClientForTesting(null);
+  }
+});
+
+test("kredietworkflow adapter: live OpenAI returning empty riskAnalysis.summary AND empty risk fields still falls back to mock cleanly", async () => {
+  const { dossierId } = await createDossier();
+  const [dossier] = await db
+    .select()
+    .from(dossiersTable)
+    .where(inArray(dossiersTable.id, [dossierId]));
+  const liveResponse = buildFinancierSample();
+  (liveResponse.riskAnalysis as unknown as { summary: unknown }).summary = "";
+  liveResponse.riskAnalysis.keyRisks = [];
+  liveResponse.riskAnalysis.mitigants = [];
+  liveResponse.riskAnalysis.assumptions = [];
+  (liveResponse.riskAnalysis as unknown as { stressCase: unknown }).stressCase = null;
+  setOpenAIChatClientForTesting(
+    makeFakeOpenAI(() => ({
+      content: JSON.stringify(liveResponse),
+      model: "gpt-4o-mini",
+    })),
+  );
+  try {
+    await withKwEnv(
+      { [KW_PROVIDER_ENV]: "openai", OPENAI_API_KEY: "sk-test-fake-1234567890" },
+      async () => {
+        const r = await GeenbankKredietworkflowAdapter.run(buildKwArgs(dossier));
+        assert.equal(r.usedMockMode, true);
+        assert.equal(r.invocation.provider, "openai");
+        assert.ok(
+          r.invocation.fallbackReason &&
+            /riskAnalysis\.summary/i.test(r.invocation.fallbackReason),
+          `unexpected fallbackReason: ${r.invocation.fallbackReason}`,
+        );
+        // Deterministic mock still produces an answer.
+        assert.ok(r.data.verdict);
+      },
+    );
+  } finally {
+    setOpenAIChatClientForTesting(null);
+  }
+});
+
+test("kredietworkflow adapter: live OpenAI never leaks OPENAI_API_KEY in the summary-fallback path", async () => {
+  const { dossierId } = await createDossier();
+  const [dossier] = await db
+    .select()
+    .from(dossiersTable)
+    .where(inArray(dossiersTable.id, [dossierId]));
+  const SECRET = "sk-test-secretvalue-xxxxxxxxxx";
+  const liveResponse = buildFinancierSample();
+  (liveResponse.riskAnalysis as unknown as { summary: unknown }).summary = "";
+  liveResponse.riskAnalysis.keyRisks = [];
+  liveResponse.riskAnalysis.mitigants = [];
+  liveResponse.riskAnalysis.assumptions = [];
+  (liveResponse.riskAnalysis as unknown as { stressCase: unknown }).stressCase = null;
+  setOpenAIChatClientForTesting(
+    makeFakeOpenAI(() => ({
+      content: JSON.stringify(liveResponse),
+      model: "gpt-4o-mini",
+    })),
+  );
+  try {
+    await withKwEnv(
+      { [KW_PROVIDER_ENV]: "openai", OPENAI_API_KEY: SECRET },
+      async () => {
+        const r = await GeenbankKredietworkflowAdapter.run(buildKwArgs(dossier));
+        const blob = JSON.stringify(r.invocation);
+        assert.ok(!blob.includes(SECRET), "OPENAI_API_KEY must never appear in invocation");
+      },
+    );
+  } finally {
+    setOpenAIChatClientForTesting(null);
+  }
+});
+
 test("validateGeenbankKredietworkflowFinancierJson rejects rateComment of wrong type", () => {
   const sample = buildFinancierSample();
   (sample.requestedStructure as unknown as { rateComment: unknown }).rateComment =

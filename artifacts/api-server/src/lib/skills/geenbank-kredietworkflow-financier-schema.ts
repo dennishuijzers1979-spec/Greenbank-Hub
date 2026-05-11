@@ -332,14 +332,83 @@ function normalizeStructureRate(structure: unknown): void {
 }
 
 /**
+ * Normalize `riskAnalysis.summary` on a raw kredietworkflow payload.
+ *
+ * Behaviour (deliberately conservative — we never invent risk content):
+ * - If `summary` is already a non-empty trimmed string → keep it
+ *   untouched. An existing valid summary is NEVER overwritten.
+ * - If `summary` is missing / null / empty / whitespace-only **and**
+ *   the model populated at least one of the supporting evidence
+ *   fields (`keyRisks`, `mitigants`, `assumptions`, `stressCase`)
+ *   with non-empty content → derive a concise Dutch (NL-NL) paragraph
+ *   from those fields and write it to `summary`.
+ * - If `summary` is missing / empty **and** there is no supporting
+ *   risk evidence → leave `summary` as-is so the validator still
+ *   rejects the payload and the adapter falls back to the
+ *   deterministic mock with a structured `fallbackReason`. We never
+ *   produce a hollow placeholder like "Geen risico's gevonden".
+ *
+ * Only mutates `riskAnalysis.summary`; every other field
+ * (`metrics`, `keyRisks`, `mitigants`, `assumptions`, `stressCase`)
+ * is left untouched so the validator still enforces shape.
+ */
+function normalizeRiskAnalysisSummary(parsed: { riskAnalysis?: unknown }): void {
+  const ra = parsed.riskAnalysis;
+  if (!isObject(ra)) return;
+
+  const existing = ra.summary;
+  if (typeof existing === "string" && existing.trim() !== "") return;
+
+  const keyRisks = isStringArray(ra.keyRisks)
+    ? ra.keyRisks.map((s) => s.trim()).filter((s) => s !== "")
+    : [];
+  const mitigants = isStringArray(ra.mitigants)
+    ? ra.mitigants.map((s) => s.trim()).filter((s) => s !== "")
+    : [];
+  const assumptions = isStringArray(ra.assumptions)
+    ? ra.assumptions.map((s) => s.trim()).filter((s) => s !== "")
+    : [];
+  const stressCase =
+    typeof ra.stressCase === "string" && ra.stressCase.trim() !== ""
+      ? ra.stressCase.trim()
+      : null;
+
+  const parts: string[] = [];
+  if (keyRisks.length > 0) {
+    parts.push(`Belangrijkste risico's: ${keyRisks.join("; ")}.`);
+  }
+  if (mitigants.length > 0) {
+    parts.push(`Mitigerende maatregelen: ${mitigants.join("; ")}.`);
+  }
+  if (stressCase) {
+    parts.push(
+      `Stresstest: ${stressCase.endsWith(".") ? stressCase : stressCase + "."}`,
+    );
+  }
+  if (assumptions.length > 0) {
+    parts.push(`Aannames: ${assumptions.join("; ")}.`);
+  }
+
+  // No supporting evidence → leave summary as-is. Validation will
+  // still fail and the live adapter will fall back to mock with a
+  // structured fallbackReason. We refuse to invent content.
+  if (parts.length === 0) return;
+
+  ra.summary = parts.join(" ");
+}
+
+/**
  * Normalize the `rate` field on every facility-structure node inside a
  * raw `geenbank-kredietworkflow` financier-shape JSON payload, before
- * validation. Operates in place on the parsed object and is safe to
- * call on any unknown value (no-op for non-objects). Touches:
+ * validation. Also normalizes `riskAnalysis.summary` when supporting
+ * evidence is present (see `normalizeRiskAnalysisSummary`). Operates
+ * in place on the parsed object and is safe to call on any unknown
+ * value (no-op for non-objects). Touches:
  *   - `requestedStructure`
  *   - `recommendedStructure`
  *   - `commercialProposal.structure`
  *   - `termSheet.structure`
+ *   - `riskAnalysis.summary` (only when missing/empty AND evidence exists)
  *
  * Does NOT touch any other field — the validator still rejects
  * genuinely malformed payloads (bad enum, missing arrays, etc.) and
@@ -356,6 +425,7 @@ export function normalizeKredietworkflowFinancierPayload(parsed: unknown): unkno
   if (isObject(parsed.termSheet)) {
     normalizeStructureRate(parsed.termSheet.structure);
   }
+  normalizeRiskAnalysisSummary(parsed);
   return parsed;
 }
 

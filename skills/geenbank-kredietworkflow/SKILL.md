@@ -442,6 +442,53 @@ Pricing/rate has no effect on `entrepreneurReport.canSubmit` or on
 `GATE_THRESHOLDS` — those remain driven exclusively by completeness /
 correctness / viability scores and the central gate.
 
+#### Risk-analysis summary (required, never empty)
+
+The `riskAnalysis` block carries the credit-risk narrative that loan
+officers and the entrepreneur view both depend on. Every live response
+MUST satisfy the following contract:
+
+* **`riskAnalysis.summary: string`** — **REQUIRED, non-empty**.
+  * Concise Dutch (NL-NL) paragraph (typically 1-3 sentences).
+  * Summarizes the **core credit risks** and the **mitigating
+    measures** that justify the chosen `decision`
+    (Go / Conditional Go / No Go).
+  * If the analysis genuinely finds no material risks, the model
+    MUST say so explicitly **and** explain why the risk profile is
+    acceptable (e.g. ratios, stress-case headroom, collateral). It
+    must NEVER emit a hollow placeholder like
+    `"Geen risico's gevonden."` without justification, and it must
+    NEVER use `null`, `""`, whitespace, or filler text.
+* **`riskAnalysis.keyRisks: string[]`** — list of named risks (may
+  be empty if there are none, but each entry must be a non-empty
+  string).
+* **`riskAnalysis.mitigants: string[]`** — list of mitigating
+  measures (same rule).
+* **`riskAnalysis.assumptions: string[]`** — list of underlying
+  assumptions (same rule).
+* **`riskAnalysis.stressCase: string | null`** *(optional)* —
+  qualitative stress-test commentary.
+
+The live adapter normalizes `riskAnalysis.summary` defensively
+(`normalizeRiskAnalysisSummary` in
+`geenbank-kredietworkflow-financier-schema.ts`), **before** schema
+validation, with strict guardrails:
+
+| LLM `riskAnalysis.summary` | Other risk fields | Normalized result |
+| --- | --- | --- |
+| non-empty string | any | unchanged (existing valid summary is never overwritten) |
+| missing / `null` / `""` / whitespace | `keyRisks` and/or `mitigants` and/or `stressCase` and/or `assumptions` non-empty | derived Dutch summary built from those fields, e.g. `"Belangrijkste risico's: …. Mitigerende maatregelen: …. Stresstest: …. Aannames: …."` |
+| missing / empty | every supporting field also empty | **left empty** → validator still rejects → adapter falls back to deterministic mock with `fallbackReason="Skill-antwoord ongeldig: riskAnalysis.summary is geen niet-lege string"` |
+
+The normalizer **never invents risk content**: it only restates what
+the model already provided in `keyRisks` / `mitigants` / `stressCase` /
+`assumptions`. It never overwrites an existing valid summary, and it
+never produces a generic "no risks found" sentence on its own.
+
+`riskAnalysis.summary` has no effect on `entrepreneurReport.canSubmit`
+or on `GATE_THRESHOLDS` — those remain driven exclusively by
+completeness / correctness / viability scores and the central gate.
+
 ### Canonical credit-analysis framing (landed)
 
 This skill is now treated as the **canonical credit-analysis engine**
