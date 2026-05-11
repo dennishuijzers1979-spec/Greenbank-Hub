@@ -135,13 +135,43 @@ under the *Repo integration notes* section.
 | Adapter | `artifacts/api-server/src/lib/skills/geenbank-kredietworkflow.ts` |
 | SKILL_MODULE | `GeenbankKredietworkflow` |
 | Mock behaviour | Combines completeness/correctness/viability into a verdict + Dutch entrepreneur report (headline, summary, strong/weak/action points, likely financier asks, canSubmit). |
-| Real source | ChatGPT Skill **`geenbank-kredietworkflow`** — the Dutch-language workflow that produces the entrepreneur-facing report. |
-| Input schema | Full upstream scores + dossier + Dutch tone constraints. |
-| Output schema | `{ confidenceScore, verdict, verdictSummary, entrepreneurReport: { headline, summary, strongPoints, weakPoints, actionPoints, likelyFinancierAsks, canSubmit }, strongPoints, weakPoints }` |
-| Missing runtime piece | Real LLM call returning Dutch JSON. |
-| Recommended method | OpenAI Assistant id — skill is large and tuned in ChatGPT. |
-| Required env | `OPENAI_API_KEY`, `AI_SKILL_GEENBANKKREDIETWORKFLOW_ASSISTANT_ID`. |
-| Risks / validation | Must produce **Dutch** UI strings (the FE renders them verbatim). `canSubmit` must respect `GATE_THRESHOLDS`. Add a unit assertion that the response is parseable JSON before persisting. |
+| Real source | ChatGPT Skill **`geenbank-kredietworkflow`** — **imported** under `skills/geenbank-kredietworkflow/` (SKILL.md + `agents/openai.yaml` + `references/{input-schema,output-specs,acceptatiecriteria,pricing-matrix,project-instruction}.md` + `assets/{executive-summary-template.docx,tarieven-lijst-geenbank.xlsx}`). The pack is a **financier / credit-committee workflow tool**, not the entrepreneur-facing self-service report the adapter currently emits — see *Mismatch* below. |
+| Input schema (adapter today) | Full upstream scores + dossier + Dutch tone constraints + `creditWorkflowContext` (chain hand-off, all-`null` placeholders today). |
+| Output schema (adapter today) | `{ confidenceScore, verdict, verdictSummary, entrepreneurReport: { headline, summary, strongPoints, weakPoints, actionPoints, likelyFinancierAsks, canSubmit }, strongPoints, weakPoints }` |
+| Output schema (imported skill) | `{ borrower, requested_structure, recommended_structure, feasibility_assessment, request_vs_recommendation_differences, metrics, collateral, covenants, assumptions, missing_information, policy_breaches, mitigants, decision: "Go"\|"Conditional Go"\|"No Go", decision_rationale }` plus four side artifacts (risk memo, indicative term sheet, kevin-credit validation, executive `.docx`). |
+| Missing runtime piece | Real LLM call **and** a decision on whether to translate the imported skill output down onto the entrepreneur-facing schema or grow a second financier-facing schema alongside. |
+| Recommended method | OpenAI Assistant id — skill is large, has bundled `.docx`/`.xlsx` assets, and is tuned in ChatGPT. |
+| Required env | `OPENAI_API_KEY`, `AI_SKILL_GEENBANKKREDIETWORKFLOW_PROVIDER=openai`, optional `AI_SKILL_GEENBANKKREDIETWORKFLOW_ASSISTANT_ID`. **None set today.** |
+| Risks / validation | Entrepreneur-facing strings must stay Dutch (the FE renders them verbatim). `canSubmit` must respect `GATE_THRESHOLDS`. The forward-only validator (`geenbank-kredietworkflow-schema.ts`) describes the **adapter contract**, not the imported skill payload — add a separate validator before wiring live. |
+
+#### Mismatch with the prepared adapter schema (do NOT silently reconcile)
+
+The imported pack and the prepared schema are functionally different
+contracts:
+
+| Imported skill field | Adapter schema field | Status |
+| --- | --- | --- |
+| `decision` (`Go` / `Conditional Go` / `No Go`) | `verdict` (`kansrijk` / `voorwaardelijk` / `uitdagend`) | **Mismatch** — different label set, different language. Live wiring must translate (e.g. Go→kansrijk, Conditional Go→voorwaardelijk, No Go→uitdagend) and document the mapping. |
+| `decision_rationale` | `verdictSummary` | Compatible after Dutch translation. |
+| `feasibility_assessment` | `entrepreneurReport.canSubmit` | Bridgeable: `canSubmit = (feasibility_assessment === "haalbaar zoals aangevraagd" && all gate thresholds met)`. |
+| `policy_breaches` / `mitigants` | `entrepreneurReport.weakPoints` / `actionPoints` | Compatible after Dutch translation and stripping financier-only jargon. **Blocking** vs **non-blocking** must stay separated. |
+| `assumptions` / `missing_information` | `entrepreneurReport.likelyFinancierAsks` | Compatible — surface the financier asks the entrepreneur should resolve before submission. |
+| `recommended_structure` / term sheet / `.docx` exec summary | (no slot today) | Persist on `SkillInvocation.extras` for the *AI uitvoeringsdetails* panel and forward to `MoneycareKredietmemorandum`. Do not break the `SkillResult<T>` shape. |
+| `metrics` (DSCR, LTV, solvency) | (no slot today; lives on dual-view + need-assessor) | Forward to financier report; do not re-derive here. |
+| `request_vs_recommendation_differences` | (no slot today) | Drop or summarise into `entrepreneurReport.actionPoints`. |
+| `borrower` / `requested_structure` | (echo from dossier) | Pass-through; do not let the live skill rewrite borrower identity. |
+
+The full hard-rule mapping (Dutch UI, blocking-vs-non-blocking
+separation, `creditWorkflowContext` for downstream skills, no
+hallucinated data, machine-stable enums) lives in
+[`skills/geenbank-kredietworkflow/SKILL.md`](../skills/geenbank-kredietworkflow/SKILL.md)
+under *Repo integration notes (forward-only — adapter still on mock)*.
+
+Importing this pack does **not** enable live invocation. The adapter
+keeps running its deterministic mock; `geenbank-kredietworkflow-schema.ts`
+keeps validating the **mock** output (the entrepreneur-facing contract).
+A second validator for the financier-shape payload must be added
+alongside — never replace — the existing one before any live call.
 
 #### Chain role + `creditWorkflowContext`
 
