@@ -173,6 +173,20 @@ keeps validating the **mock** output (the entrepreneur-facing contract).
 A second validator for the financier-shape payload must be added
 alongside — never replace — the existing one before any live call.
 
+#### Canonical credit-analysis framing (landed)
+
+The skill is now treated as the **canonical credit-analysis engine**.
+The entrepreneur view is **derived** from the same canonical financier
+output, not independently invented. Two pure forward-only artefacts
+were added — schema + mapper + tests + docs only, no adapter / runtime
+/ env / gate / RBAC / UI changes:
+
+| File | Purpose |
+| --- | --- |
+| `artifacts/api-server/src/lib/skills/geenbank-kredietworkflow-financier-schema.ts` | `GeenbankKredietworkflowFinancierOutput` type + `validateGeenbankKredietworkflowFinancierJson()` for the imported financier shape (`decision` / `feasibilityAssessment` / `riskAnalysis` / `commercialProposal` / `validationFindings` / `creditReport` / `termSheet` / `conditions` / `riskFlags` / `securities` / `pricingIndication` / `confidenceScore` / `creditWorkflowContext`). |
+| `artifacts/api-server/src/lib/skills/geenbank-kredietworkflow-financier-mapper.ts` | Pure `mapKredietworkflowFinancierOutputToAppAnalysis()` — derives `aiVerdict` (Go→kansrijk, Conditional Go→voorwaardelijk, No Go→uitdagend), `confidenceScore`, `strongPoints`, `weakPoints`, `blockingConditions`, `nonBlockingConditions`, and the Dutch entrepreneur report. Returns the canonical financier output untouched in `mapped.canonical` for `SkillInvocation.extras`. `canSubmit = decision === "Go" && no blockers && feasibility !== "niet haalbaar zoals aangevraagd"`. The central gate (`GATE_THRESHOLDS`) remains the binding source of truth for `canSubmit` — callers must overwrite to `false` if any threshold is unmet. |
+| `PipelineContext.creditWorkflowEnrichment` (in `artifacts/api-server/src/lib/skills/types.ts`) | Optional hand-off slot of type `PipelineCreditWorkflowEnrichment \| null`. Today `null` (adapter on mock); the live wiring will populate it from the canonical output so `FinancingProductAdvisorDualView` (step 3) consumes it as **enrichment** (not sole authority) and `MoneycareKredietmemorandum` (step 4) consumes the finalized credit-workflow / report context. |
+
 #### Chain role + `creditWorkflowContext`
 
 `GeenbankKredietworkflow` is **step 1** of the intended skill chain

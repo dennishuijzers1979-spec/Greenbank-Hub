@@ -50,6 +50,13 @@ import {
   GEENBANK_KREDIETWORKFLOW_VERDICTS,
   type GeenbankKredietworkflowSkillResponse,
 } from "../lib/skills/geenbank-kredietworkflow-schema";
+import {
+  validateGeenbankKredietworkflowFinancierJson,
+  GEENBANK_KREDIETWORKFLOW_DECISIONS,
+  GEENBANK_KREDIETWORKFLOW_FEASIBILITIES,
+  type GeenbankKredietworkflowFinancierOutput,
+} from "../lib/skills/geenbank-kredietworkflow-financier-schema";
+import { mapKredietworkflowFinancierOutputToAppAnalysis } from "../lib/skills/geenbank-kredietworkflow-financier-mapper";
 
 const DUAL_PROVIDER_ENV = "AI_SKILL_FINANCINGPRODUCTADVISORDUALVIEW_PROVIDER";
 
@@ -1171,3 +1178,309 @@ test("GeenbankKredietworkflow stays on mock when only OPENAI_API_KEY is set (hon
   }
 });
 
+
+// --- GeenbankKredietworkflow CANONICAL financier-shape schema + mapper ----
+//
+// These tests cover the new forward-only artefacts:
+//   - geenbank-kredietworkflow-financier-schema.ts (validator)
+//   - geenbank-kredietworkflow-financier-mapper.ts (pure mapper)
+//
+// They do NOT enable live OpenAI invocation, do NOT change the adapter
+// runtime, do NOT touch GATE_THRESHOLDS, RBAC, or the submit gate.
+
+function buildFinancierSample(
+  overrides: Partial<GeenbankKredietworkflowFinancierOutput> = {},
+): GeenbankKredietworkflowFinancierOutput {
+  const base: GeenbankKredietworkflowFinancierOutput = {
+    decision: "Go",
+    decisionRationale:
+      "DSCR ruim boven 1,3, solvabiliteit op 38%, alle kerndocumenten gevalideerd.",
+    feasibilityAssessment: "haalbaar zoals aangevraagd",
+    borrower: { name: "Test BV", kvkNumber: "12345678", description: null },
+    requestedStructure: {
+      facilityType: "Annuïteitenlening",
+      amount: 250000,
+      rate: 0.069,
+      tenor: "60 mnd",
+      repaymentProfile: "annuïtair",
+      purpose: "groei en werkkapitaal",
+    },
+    recommendedStructure: {
+      facilityType: "Annuïteitenlening",
+      amount: 250000,
+      rate: 0.069,
+      tenor: "60 mnd",
+      repaymentProfile: "annuïtair",
+      purpose: "groei en werkkapitaal",
+    },
+    riskAnalysis: {
+      summary: "Stabiele kasstroom, geconcentreerde klantbasis.",
+      metrics: { dscr: 1.45, solvency: 0.38, ltv: null, netWorkingCapital: 80000 },
+      stressCase: "Bij omzet -15% blijft DSCR > 1,1.",
+      keyRisks: ["Klantconcentratie top-3 = 55% van omzet."],
+      mitigants: [
+        "Meerjarig contract met grootste klant.",
+        "Gezonde marge van 18% op de omzet.",
+      ],
+      assumptions: ["Volume blijft stabiel op huidig niveau."],
+    },
+    commercialProposal: {
+      summary: "Annuïteitenlening met persoonlijke borg en pandrecht voorraden.",
+      structure: {
+        facilityType: "Annuïteitenlening",
+        amount: 250000,
+        rate: 0.069,
+        tenor: "60 mnd",
+        repaymentProfile: "annuïtair",
+        purpose: "groei en werkkapitaal",
+      },
+      fees: "Afsluitprovisie 1%",
+      collateralPackage: ["Persoonlijke borg DGA EUR 50.000", "Pandrecht voorraden"],
+      covenantPackage: ["Solvabiliteit > 30% per jaareinde"],
+      monitoringCadence: "Kwartaalrapportage",
+      conditionsPrecedent: ["Aktepassering binnen 30 dagen na akkoord"],
+      eventsOfDefault: ["Niet-betaling > 30 dagen"],
+    },
+    validationFindings: {
+      summary: "Onafhankelijke review bevestigt risico-inschatting.",
+      blockingFindings: [],
+      advisoryFindings: ["Verifieer doorlopende klantcontracten jaarlijks."],
+      recalculatedMetrics: { dscr: 1.42, ltv: null, solvency: 0.38 },
+      consistencyIssues: [],
+    },
+    creditReport: {
+      headline: "Kredietvoorstel Test BV — Go",
+      summary: "Casus voldoet aan acceptatiecriteria; voorstel voor commissie.",
+      sections: [
+        { title: "Samenvatting", body: "Korte samenvatting van de casus." },
+        { title: "Risicoanalyse", body: "Stabiele kasstroom, klantconcentratie." },
+      ],
+      docxArtifactRef: null,
+    },
+    termSheet: {
+      summary: "Indicatieve term sheet conform commercieel voorstel.",
+      structure: {
+        facilityType: "Annuïteitenlening",
+        amount: 250000,
+        rate: 0.069,
+        tenor: "60 mnd",
+        repaymentProfile: "annuïtair",
+        purpose: "groei en werkkapitaal",
+      },
+      fees: "Afsluitprovisie 1%",
+      collateralPackage: ["Persoonlijke borg DGA EUR 50.000"],
+      covenantPackage: ["Solvabiliteit > 30% per jaareinde"],
+      monitoringCadence: "Kwartaalrapportage",
+      conditionsPrecedent: ["Aktepassering binnen 30 dagen na akkoord"],
+      eventsOfDefault: ["Niet-betaling > 30 dagen"],
+    },
+    conditions: [
+      {
+        id: "C-001",
+        category: "monitoring",
+        severity: "advisory",
+        description: "Lever kwartaalrapportage aan via portaal.",
+        prefunding: false,
+      },
+    ],
+    riskFlags: [],
+    securities: {
+      items: [
+        {
+          type: "borg",
+          description: "Persoonlijke borg DGA",
+          marketValue: 50000,
+          forcedSaleValue: 50000,
+          ranking: null,
+          enforceabilityNotes: null,
+        },
+      ],
+      totalMarketValue: 50000,
+      totalForcedSaleValue: 50000,
+      ltv: null,
+    },
+    pricingIndication: {
+      components: [
+        { product: "OG Financiering", contribution: 250000, monthlyRate: 0.005, matrixBand: "A" },
+      ],
+      grandTotalMonthlyRate: 0.005,
+      notes: "Vanaf-tarief; definitieve quote na credit committee.",
+    },
+    confidenceScore: 82,
+    creditWorkflowContext: {
+      decision: "Go",
+      feasibilityAssessment: "haalbaar zoals aangevraagd",
+      recommendedStructureSummary: "Annuïteitenlening EUR 250k / 60 mnd / 6,9%.",
+      termSheetSummary: "Annuïteitenlening met persoonlijke borg DGA.",
+      pricingSummary: "Gewogen maandtarief 0,5%.",
+      blockingConditions: [],
+      advisoryConditions: ["Lever kwartaalrapportage aan via portaal."],
+      riskFlags: [],
+    },
+  };
+  return { ...base, ...overrides };
+}
+
+test("validateGeenbankKredietworkflowFinancierJson accepts a valid sample", () => {
+  assert.equal(
+    validateGeenbankKredietworkflowFinancierJson(buildFinancierSample()),
+    null,
+  );
+});
+
+test("validateGeenbankKredietworkflowFinancierJson rejects an invalid decision enum", () => {
+  const bad = { ...buildFinancierSample(), decision: "approved" };
+  const problem = validateGeenbankKredietworkflowFinancierJson(bad);
+  assert.ok(problem && /decision/i.test(problem));
+});
+
+test("validateGeenbankKredietworkflowFinancierJson rejects a missing riskAnalysis", () => {
+  const sample = buildFinancierSample();
+  const { riskAnalysis: _omit, ...rest } = sample;
+  const problem = validateGeenbankKredietworkflowFinancierJson(rest);
+  assert.ok(problem && /riskAnalysis/i.test(problem));
+});
+
+test("validateGeenbankKredietworkflowFinancierJson rejects a missing creditReport", () => {
+  const sample = buildFinancierSample();
+  const { creditReport: _omit, ...rest } = sample;
+  const problem = validateGeenbankKredietworkflowFinancierJson(rest);
+  assert.ok(problem && /creditReport/i.test(problem));
+});
+
+test("financier decision/feasibility enums stay in sync with the SKILL.md contract", () => {
+  assert.deepEqual(
+    [...GEENBANK_KREDIETWORKFLOW_DECISIONS].sort(),
+    ["Conditional Go", "Go", "No Go"],
+  );
+  assert.deepEqual(
+    [...GEENBANK_KREDIETWORKFLOW_FEASIBILITIES].sort(),
+    [
+      "haalbaar onder voorwaarden",
+      "haalbaar zoals aangevraagd",
+      "niet haalbaar zoals aangevraagd",
+    ],
+  );
+});
+
+test("mapper: Go + no blockers → kansrijk + canSubmit true", () => {
+  const mapped = mapKredietworkflowFinancierOutputToAppAnalysis(
+    buildFinancierSample(),
+  );
+  assert.equal(mapped.aiVerdict, "kansrijk");
+  assert.equal(mapped.entrepreneurReport.canSubmit, true);
+  assert.equal(mapped.blockingConditions.length, 0);
+  assert.ok(mapped.confidenceScore >= 0 && mapped.confidenceScore <= 100);
+});
+
+test("mapper: Conditional Go → voorwaardelijk + actionPoints carry conditions", () => {
+  const mapped = mapKredietworkflowFinancierOutputToAppAnalysis(
+    buildFinancierSample({
+      decision: "Conditional Go",
+      feasibilityAssessment: "haalbaar onder voorwaarden",
+      conditions: [
+        {
+          id: "C-002",
+          category: "evidence",
+          severity: "blocking",
+          description: "Cashflow-prognose 12 mnd ontbreekt.",
+        },
+        {
+          id: "C-003",
+          category: "monitoring",
+          severity: "advisory",
+          description: "Lever kwartaalrapportage aan.",
+        },
+      ],
+    }),
+  );
+  assert.equal(mapped.aiVerdict, "voorwaardelijk");
+  assert.equal(mapped.entrepreneurReport.canSubmit, false);
+  assert.ok(
+    mapped.entrepreneurReport.actionPoints.includes(
+      "Cashflow-prognose 12 mnd ontbreekt.",
+    ),
+  );
+  assert.ok(
+    mapped.entrepreneurReport.actionPoints.includes(
+      "Lever kwartaalrapportage aan.",
+    ),
+  );
+  assert.deepEqual(mapped.blockingConditions, [
+    "Cashflow-prognose 12 mnd ontbreekt.",
+  ]);
+  // nonBlockingConditions = advisory conditions ⊕ advisory validation
+  // findings ⊕ advisory risk flags (deduped). The base sample carries
+  // an advisory validation finding too, so assert by inclusion.
+  assert.ok(
+    mapped.nonBlockingConditions.includes("Lever kwartaalrapportage aan."),
+  );
+});
+
+test("mapper: No Go → uitdagend + canSubmit false", () => {
+  const mapped = mapKredietworkflowFinancierOutputToAppAnalysis(
+    buildFinancierSample({
+      decision: "No Go",
+      feasibilityAssessment: "niet haalbaar zoals aangevraagd",
+      validationFindings: {
+        summary: "Onafhankelijke review wijst op blokkers.",
+        blockingFindings: ["Beleidsbreuk: solvabiliteit < 15%."],
+        advisoryFindings: [],
+      },
+    }),
+  );
+  assert.equal(mapped.aiVerdict, "uitdagend");
+  assert.equal(mapped.entrepreneurReport.canSubmit, false);
+  assert.ok(
+    mapped.blockingConditions.includes("Beleidsbreuk: solvabiliteit < 15%."),
+  );
+});
+
+test("mapper: entrepreneur report is derived in Dutch from the same financier output", () => {
+  const sample = buildFinancierSample();
+  const mapped = mapKredietworkflowFinancierOutputToAppAnalysis(sample);
+  // Same source, no translation invented out of thin air — the
+  // borrower name and Dutch rationale must surface in the summary.
+  assert.match(mapped.entrepreneurReport.summary, /Test BV/);
+  assert.match(mapped.entrepreneurReport.summary, /DSCR/);
+  // Dutch headline copy.
+  assert.match(
+    mapped.entrepreneurReport.headline,
+    /sterk|dichtbij|werk te doen/i,
+  );
+});
+
+test("mapper: canonical financier output is preserved untouched", () => {
+  const sample = buildFinancierSample();
+  const mapped = mapKredietworkflowFinancierOutputToAppAnalysis(sample);
+  // Reference equality — the mapper returns the exact same object so
+  // callers can persist it on SkillInvocation.extras without copying.
+  assert.equal(mapped.canonical, sample);
+  // And the canonical output still passes its own validator.
+  assert.equal(
+    validateGeenbankKredietworkflowFinancierJson(mapped.canonical),
+    null,
+  );
+});
+
+test("mapper: blocking risk flag forces canSubmit=false even for Go decision", () => {
+  const mapped = mapKredietworkflowFinancierOutputToAppAnalysis(
+    buildFinancierSample({
+      riskFlags: [
+        {
+          id: "R-001",
+          category: "compliance",
+          severity: "blocking",
+          description: "Sanctielijst-treffer op UBO.",
+        },
+      ],
+    }),
+  );
+  // Decision label still maps deterministically …
+  assert.equal(mapped.aiVerdict, "kansrijk");
+  // … but a blocking risk flag prevents submit.
+  assert.equal(mapped.entrepreneurReport.canSubmit, false);
+  assert.ok(
+    mapped.blockingConditions.includes("Sanctielijst-treffer op UBO."),
+  );
+});

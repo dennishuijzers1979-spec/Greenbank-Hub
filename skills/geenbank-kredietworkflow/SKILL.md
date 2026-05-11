@@ -350,6 +350,70 @@ adapter* rule.
 | `borrower` / `requested_structure` | (echo from dossier) | Pass-through. Do not let the live skill rewrite borrower identity. |
 | `risk analysis memo` / `indicative term sheet` / `executive summary .docx` | (not consumed today) | Persist as separate `extras` artifacts; do not break the `SkillResult<T>` shape. |
 
+### Canonical credit-analysis framing (landed)
+
+This skill is now treated as the **canonical credit-analysis engine**
+of the chain — not as an entrepreneur-view generator. The intended
+internal flow is:
+
+1. risk analysis        (anna-risk stage)
+2. commercial proposal  (term sheet stage)
+3. control / validation (kevin-credit stage)
+4. credit report        (executive summary stage)
+
+Applicant data + document ingestion happen inside the risk-analysis
+stage. The entrepreneur view is **derived** from the same canonical
+financier output, not independently invented.
+
+To support that without changing the adapter runtime, two pure
+artefacts ship alongside this SKILL.md:
+
+* `artifacts/api-server/src/lib/skills/geenbank-kredietworkflow-financier-schema.ts`
+  — `GeenbankKredietworkflowFinancierOutput` type +
+  `validateGeenbankKredietworkflowFinancierJson()`. Models the
+  imported financier shape (decision, decisionRationale,
+  feasibilityAssessment, borrower, requestedStructure,
+  recommendedStructure, riskAnalysis, commercialProposal,
+  validationFindings, creditReport, termSheet, conditions, riskFlags,
+  securities, pricingIndication, confidenceScore,
+  creditWorkflowContext).
+* `artifacts/api-server/src/lib/skills/geenbank-kredietworkflow-financier-mapper.ts`
+  — pure `mapKredietworkflowFinancierOutputToAppAnalysis()`. Derives
+  the entrepreneur-facing app analysis from the financier output:
+
+  | Financier field | App field |
+  | --- | --- |
+  | `decision: "Go"` | `aiVerdict: "kansrijk"` |
+  | `decision: "Conditional Go"` | `aiVerdict: "voorwaardelijk"` |
+  | `decision: "No Go"` | `aiVerdict: "uitdagend"` |
+  | `confidenceScore` | `confidenceScore` (clamped 0-100) |
+  | `riskAnalysis.mitigants` | `entrepreneurReport.strongPoints` |
+  | `riskAnalysis.keyRisks` ⊕ blocking conditions | `entrepreneurReport.weakPoints` |
+  | blocking conditions ⊕ advisory conditions | `entrepreneurReport.actionPoints` |
+  | `riskAnalysis.assumptions` ⊕ `commercialProposal.conditionsPrecedent` | `entrepreneurReport.likelyFinancierAsks` |
+  | `decisionRationale` | `entrepreneurReport.summary` (prefixed with borrower name) |
+  | derived | `entrepreneurReport.headline` (Dutch verdict copy) |
+  | `decision === "Go" && no blockers && feasibility !== "niet haalbaar zoals aangevraagd"` | `entrepreneurReport.canSubmit` |
+
+  The mapper returns the **canonical financier output untouched** in
+  `mapped.canonical`. Callers MUST persist that on
+  `SkillInvocation.extras` so loan-officer review,
+  `FinancingProductAdvisorDualView` enrichment, and
+  `MoneycareKredietmemorandum` can keep using the rich payload.
+
+* `PipelineContext` in
+  `artifacts/api-server/src/lib/skills/types.ts` now carries an
+  optional `creditWorkflowEnrichment: PipelineCreditWorkflowEnrichment | null`
+  slot — the chain hand-off documented under the *Mismatch* section
+  above. Today it is `null` (adapter still on mock); the live wiring
+  populates it from the canonical output.
+
+These are schema + mapper + types + tests + docs only. The adapter
+(`geenbank-kredietworkflow.ts`) still runs the deterministic mock,
+the central gate (`GATE_THRESHOLDS`) still drives `canSubmit`,
+`validateGeenbankKredietworkflowJson` still validates the mock
+output, and no live OpenAI call is enabled.
+
 ### Forward-only steps to wire live invocation (NOT executed today)
 
 1. Decide whether the adapter keeps its current entrepreneur-facing
