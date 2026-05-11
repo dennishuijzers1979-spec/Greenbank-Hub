@@ -3059,6 +3059,249 @@ test("kredietworkflow adapter: live OpenAI with truly unusable validationFinding
   }
 });
 
+// --- creditReport.headline normalization ---------------------------------
+//
+// These tests exercise the pure credit-report-headline normalizer used
+// by the live kredietworkflow adapter BEFORE schema validation. They
+// never call real OpenAI. They guard against the production failure
+// mode "creditReport.headline is geen niet-lege string" without ever
+// inventing a credit conclusion.
+
+test("normalizeKredietworkflowFinancierPayload: valid creditReport.headline passes through unchanged", () => {
+  const sample = buildFinancierSample();
+  const before = sample.creditReport.headline;
+  normalizeKredietworkflowFinancierPayload(sample);
+  assert.equal(sample.creditReport.headline, before);
+  assert.equal(validateGeenbankKredietworkflowFinancierJson(sample), null);
+});
+
+test("normalizeKredietworkflowFinancierPayload: missing creditReport.headline derives from borrower.name + decision", () => {
+  const sample = buildFinancierSample();
+  (sample.creditReport as unknown as { headline: unknown }).headline = undefined;
+  normalizeKredietworkflowFinancierPayload(sample);
+  assert.equal(
+    sample.creditReport.headline,
+    `Kredietvoorstel ${sample.borrower.name} — ${sample.decision}`,
+  );
+  assert.equal(validateGeenbankKredietworkflowFinancierJson(sample), null);
+});
+
+test("normalizeKredietworkflowFinancierPayload: empty / whitespace / null headline with evidence is filled", () => {
+  for (const bad of ["", "   ", null]) {
+    const sample = buildFinancierSample();
+    (sample.creditReport as unknown as { headline: unknown }).headline = bad;
+    normalizeKredietworkflowFinancierPayload(sample);
+    assert.equal(
+      sample.creditReport.headline,
+      `Kredietvoorstel ${sample.borrower.name} — ${sample.decision}`,
+      `headline not filled for input ${JSON.stringify(bad)}`,
+    );
+    assert.equal(validateGeenbankKredietworkflowFinancierJson(sample), null);
+  }
+});
+
+test("normalizeKredietworkflowFinancierPayload: missing headline + missing decision uses borrower.name only", () => {
+  const sample = buildFinancierSample();
+  (sample.creditReport as unknown as { headline: unknown }).headline = "";
+  (sample as unknown as { decision: unknown }).decision = "not-a-real-decision";
+  normalizeKredietworkflowFinancierPayload(sample);
+  assert.equal(
+    sample.creditReport.headline,
+    `Kredietvoorstel ${sample.borrower.name}`,
+  );
+  // The unrelated bad decision must still be rejected by the validator.
+  const problem = validateGeenbankKredietworkflowFinancierJson(sample);
+  assert.ok(problem && /decision/i.test(problem));
+});
+
+test("normalizeKredietworkflowFinancierPayload: missing headline + no borrower falls back to first section title", () => {
+  const sample = buildFinancierSample();
+  (sample.creditReport as unknown as { headline: unknown }).headline = "";
+  (sample.borrower as unknown as { name: unknown }).name = "";
+  normalizeKredietworkflowFinancierPayload(sample);
+  assert.equal(sample.creditReport.headline, sample.creditReport.sections[0].title);
+  // borrower.name now empty → unrelated validator failure stays.
+  const problem = validateGeenbankKredietworkflowFinancierJson(sample);
+  assert.ok(problem && /borrower\.name/i.test(problem));
+});
+
+test("normalizeKredietworkflowFinancierPayload: missing headline + no borrower + no sections falls back to summary first sentence", () => {
+  const sample = buildFinancierSample();
+  (sample.creditReport as unknown as { headline: unknown }).headline = "";
+  (sample.borrower as unknown as { name: unknown }).name = "";
+  sample.creditReport.sections = [];
+  sample.creditReport.summary =
+    "Casus voldoet aan acceptatiecriteria. Voorstel voor commissie ter besluitvorming.";
+  normalizeKredietworkflowFinancierPayload(sample);
+  assert.equal(
+    sample.creditReport.headline,
+    "Casus voldoet aan acceptatiecriteria.",
+  );
+});
+
+test("normalizeKredietworkflowFinancierPayload: missing headline + only decisionRationale evidence uses rationale", () => {
+  const sample = buildFinancierSample();
+  (sample.creditReport as unknown as { headline: unknown }).headline = "";
+  (sample.borrower as unknown as { name: unknown }).name = "";
+  sample.creditReport.sections = [];
+  sample.creditReport.summary = "";
+  sample.decisionRationale =
+    "Stabiele kasstroom en sterke borgstelling rechtvaardigen het krediet.";
+  normalizeKredietworkflowFinancierPayload(sample);
+  assert.equal(
+    sample.creditReport.headline,
+    "Stabiele kasstroom en sterke borgstelling rechtvaardigen het krediet.",
+  );
+});
+
+test("normalizeKredietworkflowFinancierPayload: missing headline AND no usable evidence stays empty (validator still rejects)", () => {
+  const sample = buildFinancierSample();
+  (sample.creditReport as unknown as { headline: unknown }).headline = "";
+  (sample.borrower as unknown as { name: unknown }).name = "Anoniem";
+  // Wipe every fallback source.
+  sample.creditReport.sections = [{ title: "   ", body: "" }];
+  sample.creditReport.summary = "";
+  sample.decisionRationale = "";
+  // Now strip the borrower.name fallback so headline truly cannot be derived.
+  (sample.borrower as unknown as { name: unknown }).name = "   ";
+  normalizeKredietworkflowFinancierPayload(sample);
+  // Headline must remain empty / unusable so validator catches it.
+  assert.ok(
+    !sample.creditReport.headline || sample.creditReport.headline.trim() === "",
+    `expected empty headline, got ${JSON.stringify(sample.creditReport.headline)}`,
+  );
+  // Validator rejects on whichever required field fails first
+  // (decisionRationale / borrower.name / creditReport.headline / sections);
+  // the headline normalizer must not invent content to mask that.
+  const problem = validateGeenbankKredietworkflowFinancierJson(sample);
+  assert.ok(problem, "expected validator to reject payload with no usable evidence");
+});
+
+test("normalizeKredietworkflowFinancierPayload: unrelated invalid creditReport.sections still fails validation after headline normalization", () => {
+  const sample = buildFinancierSample();
+  (sample.creditReport as unknown as { headline: unknown }).headline = "";
+  // Section-shape regression — body wrong type.
+  (sample.creditReport.sections[0] as unknown as { body: unknown }).body = 42;
+  normalizeKredietworkflowFinancierPayload(sample);
+  // headline was derived…
+  assert.equal(
+    sample.creditReport.headline,
+    `Kredietvoorstel ${sample.borrower.name} — ${sample.decision}`,
+  );
+  // …but sections.body type error must still fail validation.
+  const problem = validateGeenbankKredietworkflowFinancierJson(sample);
+  assert.ok(
+    problem && /sections.*body/i.test(problem),
+    `expected sections.body error, got ${problem}`,
+  );
+});
+
+test("normalizeKredietworkflowFinancierPayload: existing normalizers still cooperate (rate + risk + commercial + findings + headline)", () => {
+  const sample = buildFinancierSample();
+  // Force every prior-fix normalizer to fire too.
+  (sample.requestedStructure as unknown as { rate: unknown }).rate = "8.5%";
+  sample.riskAnalysis.summary = "";
+  (sample.commercialProposal as unknown as { summary: unknown }).summary = "";
+  (sample.validationFindings as unknown as { blockingFindings: unknown }).blockingFindings =
+    "Externe verklaring ontbreekt";
+  (sample.creditReport as unknown as { headline: unknown }).headline = "";
+  normalizeKredietworkflowFinancierPayload(sample);
+  assert.equal(sample.requestedStructure.rate, 8.5);
+  assert.match(sample.riskAnalysis.summary, /Belangrijkste risico's:/);
+  assert.match(sample.commercialProposal.summary, /Voorgestelde structuur:/);
+  assert.deepEqual(sample.validationFindings.blockingFindings, [
+    "Externe verklaring ontbreekt",
+  ]);
+  assert.equal(
+    sample.creditReport.headline,
+    `Kredietvoorstel ${sample.borrower.name} — ${sample.decision}`,
+  );
+  assert.equal(validateGeenbankKredietworkflowFinancierJson(sample), null);
+});
+
+test("kredietworkflow adapter: live OpenAI returning empty creditReport.headline is normalized + accepted (no fallback)", async () => {
+  const { dossierId } = await createDossier();
+  const [dossier] = await db
+    .select()
+    .from(dossiersTable)
+    .where(inArray(dossiersTable.id, [dossierId]));
+  const liveResponse = buildFinancierSample();
+  // Reproduce the exact production failure mode: empty headline,
+  // borrower.name + decision still present.
+  (liveResponse.creditReport as unknown as { headline: unknown }).headline = "";
+  setOpenAIChatClientForTesting(
+    makeFakeOpenAI(() => ({
+      content: JSON.stringify(liveResponse),
+      model: "gpt-4o-mini",
+    })),
+  );
+  try {
+    await withKwEnv(
+      { [KW_PROVIDER_ENV]: "openai", OPENAI_API_KEY: "sk-test-fake-1234567890" },
+      async () => {
+        const r = await GeenbankKredietworkflowAdapter.run(buildKwArgs(dossier));
+        assert.equal(
+          r.ok,
+          true,
+          `expected live success, got fallbackReason=${r.invocation.fallbackReason}`,
+        );
+        assert.equal(r.usedMockMode, false);
+        assert.equal(r.invocation.fallbackReason, null);
+        const extras = r.invocation.extras as
+          | { canonical?: GeenbankKredietworkflowFinancierOutput }
+          | null;
+        assert.ok(extras?.canonical, "extras.canonical must be populated on live success");
+        assert.equal(
+          extras!.canonical!.creditReport.headline,
+          `Kredietvoorstel ${liveResponse.borrower.name} — ${liveResponse.decision}`,
+        );
+      },
+    );
+  } finally {
+    setOpenAIChatClientForTesting(null);
+  }
+});
+
+test("kredietworkflow adapter: live OpenAI with unusable creditReport (headline normalized from rationale but summary still empty) falls back to mock cleanly", async () => {
+  const { dossierId } = await createDossier();
+  const [dossier] = await db
+    .select()
+    .from(dossiersTable)
+    .where(inArray(dossiersTable.id, [dossierId]));
+  const liveResponse = buildFinancierSample();
+  // Headline gets derived from borrower+decision via the normalizer,
+  // but `creditReport.summary` is an unrelated REQUIRED field that the
+  // headline normalizer never touches. The validator must still
+  // reject and the adapter must still fall back to the deterministic
+  // mock with a structured fallbackReason mentioning creditReport.
+  (liveResponse.creditReport as unknown as { headline: unknown }).headline = "";
+  (liveResponse.creditReport as unknown as { summary: unknown }).summary = "";
+  setOpenAIChatClientForTesting(
+    makeFakeOpenAI(() => ({
+      content: JSON.stringify(liveResponse),
+      model: "gpt-4o-mini",
+    })),
+  );
+  try {
+    await withKwEnv(
+      { [KW_PROVIDER_ENV]: "openai", OPENAI_API_KEY: "sk-test-fake-1234567890" },
+      async () => {
+        const r = await GeenbankKredietworkflowAdapter.run(buildKwArgs(dossier));
+        assert.equal(r.usedMockMode, true);
+        assert.equal(r.invocation.provider, "openai");
+        assert.ok(
+          r.invocation.fallbackReason &&
+            /(creditReport|borrower|headline|summary)/i.test(r.invocation.fallbackReason),
+          `unexpected fallbackReason: ${r.invocation.fallbackReason}`,
+        );
+        assert.ok(r.data.verdict);
+      },
+    );
+  } finally {
+    setOpenAIChatClientForTesting(null);
+  }
+});
+
 test("validateGeenbankKredietworkflowFinancierJson rejects rateComment of wrong type", () => {
   const sample = buildFinancierSample();
   (sample.requestedStructure as unknown as { rateComment: unknown }).rateComment =

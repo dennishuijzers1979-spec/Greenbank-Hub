@@ -646,6 +646,46 @@ adapter falls back to the deterministic mock with a structured
 or on `GATE_THRESHOLDS` — those remain driven exclusively by
 completeness / correctness / viability scores and the central gate.
 
+#### Credit-report headline (required, never empty)
+
+`creditReport` is the executive committee memo and carries a
+**required, non-empty** headline:
+
+* **`creditReport.headline: string`** — REQUIRED, non-empty. Short,
+  zakelijk, committee-style. When `decision` and `borrower.name` are
+  available, the headline must summarise that existing information
+  (e.g. `"Kredietvoorstel <borrower.name> — <decision>"`). It must
+  never invent a new decision, risk, condition, amount, rate or other
+  conclusion that is not already present elsewhere on the canonical
+  payload.
+
+`creditReport.summary` and `creditReport.sections` remain strictly
+required and are **not** normalized — produce real Dutch content.
+
+The live adapter normalizes `creditReport.headline` defensively
+(`normalizeCreditReportHeadline`) before schema validation. Priority:
+
+| LLM `creditReport.headline` | Other available evidence | Normalized headline |
+| --- | --- | --- |
+| non-empty string | any | unchanged (existing valid headline is never overwritten; only trimmed/clipped to 200 chars) |
+| missing / `null` / `""` / whitespace | `borrower.name` AND a valid `decision` (`Go` / `Conditional Go` / `No Go`) | `"Kredietvoorstel <borrower.name> — <decision>"` |
+| missing / empty | `borrower.name` only | `"Kredietvoorstel <borrower.name>"` |
+| missing / empty | first non-empty `creditReport.sections[*].title` | that title (clipped to 140 chars) |
+| missing / empty | non-empty `creditReport.summary` | first sentence of the summary (clipped) |
+| missing / empty | non-empty top-level `decisionRationale` | first sentence of the rationale (clipped) |
+| missing / empty | none of the above | **left empty** → validator still rejects → adapter falls back to deterministic mock with `fallbackReason="Skill-antwoord ongeldig: creditReport.headline is geen niet-lege string"` |
+
+The normalizer **never invents committee content**: it only restates
+evidence already present on the same canonical payload. It does not
+touch `creditReport.summary`, `creditReport.sections` or
+`creditReport.docxArtifactRef`, so genuinely missing executive content
+still triggers the validator and the live adapter still falls back to
+the deterministic mock with a structured `fallbackReason`.
+
+`creditReport.headline` has no effect on `entrepreneurReport.canSubmit`
+or on `GATE_THRESHOLDS` — those remain driven exclusively by
+completeness / correctness / viability scores and the central gate.
+
 ### Canonical credit-analysis framing (landed)
 
 This skill is now treated as the **canonical credit-analysis engine**

@@ -667,7 +667,126 @@ export function normalizeKredietworkflowFinancierPayload(
   normalizeCommercialProposalSummary(parsed.commercialProposal);
   normalizeCommercialProposalSummary(parsed.termSheet);
   normalizeValidationFindings(parsed.validationFindings);
+  normalizeCreditReportHeadline(parsed);
   return parsed;
+}
+
+/**
+ * Trim and clip a string for use as a headline pass-through (path 1
+ * of `normalizeCreditReportHeadline`). Returns `null` for non-strings
+ * or empty/whitespace input. Never invents content; only restates.
+ * Does NOT cut at sentence boundary — an existing valid headline
+ * is preserved verbatim unless it exceeds `max` characters, in which
+ * case it is hard-clipped with an ellipsis.
+ */
+function clipExistingHeadline(raw: unknown, max = 200): string | null {
+  if (typeof raw !== "string") return null;
+  const t = raw.trim();
+  if (t === "") return null;
+  if (t.length <= max) return t;
+  return t.slice(0, max - 1).trimEnd() + "…";
+}
+
+/**
+ * Derive a one-sentence headline from a longer field (summary,
+ * decisionRationale, section title). Returns the first sentence of
+ * the input (terminated by ". "), or the whole input if no sentence
+ * boundary is present. Hard-clips to `max` chars with an ellipsis if
+ * still too long. Returns `null` for non-strings or empty/whitespace
+ * input. Never invents content.
+ */
+function firstSentenceForHeadline(raw: unknown, max = 140): string | null {
+  if (typeof raw !== "string") return null;
+  const t = raw.trim();
+  if (t === "") return null;
+  const dot = t.indexOf(". ");
+  const sentence = dot > 0 ? t.slice(0, dot + 1) : t;
+  if (sentence.length <= max) return sentence;
+  return sentence.slice(0, max - 1).trimEnd() + "…";
+}
+
+/**
+ * Conservatively normalize `creditReport.headline` in place.
+ *
+ * Rules (in priority order):
+ *  1. existing non-empty trimmed `creditReport.headline`     → kept as-is
+ *  2. `borrower.name` AND a valid top-level `decision`        → committee-style headline
+ *     `"Kredietvoorstel <borrower.name> — <decision>"`
+ *  3. `borrower.name` alone                                   → `"Kredietvoorstel <borrower.name>"`
+ *  4. first non-empty `creditReport.sections[*].title`        → that title (clipped)
+ *  5. non-empty `creditReport.summary`                        → first sentence (clipped)
+ *  6. non-empty top-level `decisionRationale`                 → first sentence (clipped)
+ *  7. otherwise                                               → left empty so the validator still
+ *                                                               rejects and the live adapter falls
+ *                                                               back to the deterministic mock with
+ *                                                               a structured `fallbackReason`.
+ *
+ * No content is invented: every branch only restates evidence that
+ * the model already produced elsewhere on the same payload. Never
+ * touches `creditReport.summary`, `creditReport.sections` (they remain
+ * strictly validated), `creditReport.docxArtifactRef`, or any other
+ * field. No-op when `creditReport` is not an object.
+ */
+function normalizeCreditReportHeadline(parsed: Record<string, unknown>): void {
+  const cr = parsed.creditReport;
+  if (!isObject(cr)) return;
+
+  // 1. existing valid headline → keep (verbatim, only clipped if huge)
+  const existing = clipExistingHeadline(cr.headline);
+  if (existing !== null) {
+    cr.headline = existing;
+    return;
+  }
+
+  // 2 + 3. derive from borrower.name (+ decision)
+  const borrowerName =
+    isObject(parsed.borrower) && typeof parsed.borrower.name === "string"
+      ? parsed.borrower.name.trim()
+      : "";
+  const decisionRaw =
+    typeof parsed.decision === "string" &&
+    GEENBANK_KREDIETWORKFLOW_DECISIONS.has(
+      parsed.decision as GeenbankKredietworkflowDecision,
+    )
+      ? (parsed.decision as GeenbankKredietworkflowDecision)
+      : null;
+  if (borrowerName !== "" && decisionRaw !== null) {
+    cr.headline = `Kredietvoorstel ${borrowerName} — ${decisionRaw}`;
+    return;
+  }
+  if (borrowerName !== "") {
+    cr.headline = `Kredietvoorstel ${borrowerName}`;
+    return;
+  }
+
+  // 4. first non-empty section title
+  if (Array.isArray(cr.sections)) {
+    for (const sec of cr.sections as unknown[]) {
+      if (isObject(sec)) {
+        const t = firstSentenceForHeadline(sec.title);
+        if (t !== null) {
+          cr.headline = t;
+          return;
+        }
+      }
+    }
+  }
+
+  // 5. first sentence of creditReport.summary
+  const fromSummary = firstSentenceForHeadline(cr.summary);
+  if (fromSummary !== null) {
+    cr.headline = fromSummary;
+    return;
+  }
+
+  // 6. first sentence of decisionRationale
+  const fromRationale = firstSentenceForHeadline(parsed.decisionRationale);
+  if (fromRationale !== null) {
+    cr.headline = fromRationale;
+    return;
+  }
+
+  // 7. no evidence → leave headline as-is so validator rejects → mock fallback
 }
 
 /**
