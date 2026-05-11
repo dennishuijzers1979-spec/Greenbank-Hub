@@ -959,3 +959,68 @@ test("GET /dossiers/:id/dual-view-advice does not leak secrets in the response",
   const text = await res.text();
   assert.ok(!text.includes(secret), "raw secret leaked through endpoint");
 });
+
+test("GET /dossiers/:id/dual-view-advice falls back to an earlier analysis run when the latest run is a memorandum", async () => {
+  const { dossierId } = await createDossier("submitted_to_geenbank");
+  const earlier = new Date(Date.now() - 60_000);
+  const later = new Date();
+  // Earlier analysis run with a live dual-view invocation.
+  await db.insert(aiAnalysisRunsTable).values({
+    dossierId,
+    runType: "prevalidation",
+    status: "completed",
+    startedAt: earlier,
+    completedAt: earlier,
+    usedMockMode: false,
+    skillInvocations: [
+      {
+        skillName: "FinancingProductAdvisorDualView",
+        provider: "openai",
+        usedMockMode: false,
+        model: "gpt-4o-mini",
+        durationMs: 100,
+        fallbackReason: null,
+        startedAt: earlier.toISOString(),
+        completedAt: earlier.toISOString(),
+        extras: {
+          response: {
+            partner_view: SAMPLE_PARTNER_VIEW,
+            entrepreneur_view: SAMPLE_ENTREPRENEUR_VIEW,
+          },
+        },
+      },
+    ],
+  });
+  // Newer memorandum run that does NOT contain a dual-view invocation.
+  await db.insert(aiAnalysisRunsTable).values({
+    dossierId,
+    runType: "memorandum",
+    status: "completed",
+    startedAt: later,
+    completedAt: later,
+    usedMockMode: true,
+    skillInvocations: [
+      {
+        skillName: "MoneycareKredietmemorandum",
+        provider: "mock",
+        usedMockMode: true,
+        durationMs: 5,
+      },
+    ],
+    memorandum: { sections: [], attachments: [], partnerNotes: null },
+  });
+  const officer = await createUser("loan_officer");
+  const res = await fetch(`${baseUrl}/dossiers/${dossierId}/dual-view-advice`, {
+    headers: { Cookie: `geenbank_session=${officer.sessionToken}` },
+  });
+  assert.equal(res.status, 200, "should fall back to the earlier analysis run");
+  const body = (await res.json()) as {
+    partnerView: { recommended_product: string };
+    executionMode: string;
+  };
+  assert.equal(body.executionMode, "live_openai");
+  assert.equal(
+    body.partnerView.recommended_product,
+    "Kortlopende werkkapitaalfaciliteit",
+  );
+});

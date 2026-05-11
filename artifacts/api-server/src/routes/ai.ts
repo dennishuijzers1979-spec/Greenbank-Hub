@@ -280,19 +280,29 @@ router.get(
       res.status(404).json({ error: "Dossier niet gevonden" });
       return;
     }
-    const run = await loadDossierForOfficer(params.data.dossierId);
-    if (!run) {
+    // We do NOT just take the absolute latest run, because a more recent
+    // memorandum run typically has no FinancingProductAdvisorDualView
+    // invocation. Walk newest-first and return the first run that yields
+    // an advice payload — that is the freshest dual-view skill output.
+    const runs = await db
+      .select()
+      .from(aiAnalysisRunsTable)
+      .where(eq(aiAnalysisRunsTable.dossierId, params.data.dossierId))
+      .orderBy(desc(aiAnalysisRunsTable.startedAt));
+    if (runs.length === 0) {
       res.status(404).json({ error: "Geen analyse-run gevonden" });
       return;
     }
-    const advice = extractDualViewAdvice(params.data.dossierId, run);
-    if (!advice) {
-      res
-        .status(404)
-        .json({ error: "Geen FinancingProductAdvisorDualView-uitvoer gevonden" });
-      return;
+    for (const run of runs) {
+      const advice = extractDualViewAdvice(params.data.dossierId, run);
+      if (advice) {
+        res.json(advice);
+        return;
+      }
     }
-    res.json(advice);
+    res
+      .status(404)
+      .json({ error: "Geen FinancingProductAdvisorDualView-uitvoer gevonden" });
   },
 );
 

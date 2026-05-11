@@ -71,7 +71,7 @@ export default function DossierDetail() {
   const { data: dossier, isLoading } = useGetDossier(id, { query: { queryKey: getGetDossierQueryKey(id), enabled: !!id } });
   const { data: report } = useGetFinancierReport(id, { query: { queryKey: getGetFinancierReportQueryKey(id), enabled: !!id } });
   const { data: latestRun } = useGetLatestRun(id, { query: { queryKey: getGetLatestRunQueryKey(id), enabled: !!id, retry: false } });
-  const { data: dualAdvice } = useGetDualViewAdvice(id, { query: { queryKey: getGetDualViewAdviceQueryKey(id), enabled: !!id, retry: false } });
+  const { data: dualAdvice, isLoading: dualAdviceLoading, error: dualAdviceError } = useGetDualViewAdvice(id, { query: { queryKey: getGetDualViewAdviceQueryKey(id), enabled: !!id, retry: false } });
   const { data: documents } = useListDossierDocuments(id, { query: { queryKey: getListDossierDocumentsQueryKey(id), enabled: !!id } });
   const { data: memo } = useGetMemorandum(id, { query: { queryKey: getGetMemorandumQueryKey(id), enabled: !!id, retry: false } });
   const { data: partners } = useListPartners({ query: { queryKey: getListPartnersQueryKey() } });
@@ -258,6 +258,26 @@ export default function DossierDetail() {
             </div>
           ) : (
             <Card><CardContent className="py-10 text-center text-muted-foreground">Geen AI rapport beschikbaar voor dit dossier.</CardContent></Card>
+          )}
+
+          {!dualAdvice && !dualAdviceLoading && dualAdviceError && (
+            <Card data-testid="dual-view-advice-empty" className="border-dashed">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <Building2 className="w-4 h-4" /> Financier productadvies (intern)
+                </CardTitle>
+                <CardDescription>
+                  Nog geen interne productuitkomst beschikbaar voor dit dossier.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="text-sm text-muted-foreground">
+                <p>
+                  Zodra de prospect een AI-analyse heeft uitgevoerd verschijnt hier de uitkomst van
+                  {' '}<span className="font-mono">FinancingProductAdvisorDualView</span>: aanbevolen product, alternatief,
+                  indicatieve structuur, risico's en bewijs-gaten. Alleen zichtbaar voor loan officers en admins.
+                </p>
+              </CardContent>
+            </Card>
           )}
 
           {dualAdvice && (() => {
