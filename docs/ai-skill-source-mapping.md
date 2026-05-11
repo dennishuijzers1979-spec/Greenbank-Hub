@@ -167,11 +167,32 @@ hallucinated data, machine-stable enums) lives in
 [`skills/geenbank-kredietworkflow/SKILL.md`](../skills/geenbank-kredietworkflow/SKILL.md)
 under *Repo integration notes (forward-only — adapter still on mock)*.
 
-Importing this pack does **not** enable live invocation. The adapter
-keeps running its deterministic mock; `geenbank-kredietworkflow-schema.ts`
-keeps validating the **mock** output (the entrepreneur-facing contract).
-A second validator for the financier-shape payload must be added
-alongside — never replace — the existing one before any live call.
+Importing this pack does **not** enable live invocation by default.
+The adapter keeps running its deterministic mock unless the per-skill
+opt-in (`AI_SKILL_GEENBANKKREDIETWORKFLOW_PROVIDER=openai` plus
+`OPENAI_API_KEY`) is set; see *Live OpenAI pilot (landed)* below.
+`geenbank-kredietworkflow-schema.ts` keeps validating the **mock**
+output (the entrepreneur-facing contract); the financier-shape payload
+is validated by `geenbank-kredietworkflow-financier-schema.ts`
+alongside — never replacing — the existing entrepreneur validator.
+
+#### Live OpenAI pilot (landed)
+
+The kredietworkflow adapter is now **live-capable**, env-gated:
+
+| Concern | Behavior |
+| --- | --- |
+| Required env | `AI_SKILL_GEENBANKKREDIETWORKFLOW_PROVIDER=openai` **and** `OPENAI_API_KEY`. Optional: `AI_SKILL_GEENBANKKREDIETWORKFLOW_MODEL` or `OPENAI_MODEL` (default `gpt-4o-mini`). |
+| Honesty rule | `OPENAI_API_KEY` alone does NOT promote this skill (or any other) to live — `runtime.detectGlobalProvider()` keeps the global default `mock`. |
+| System prompt | `loadSkillMarkdown("geenbank-kredietworkflow")` (the imported `SKILL.md`). |
+| Input payload | Structured JSON: borrower, request, scores + `GATE_THRESHOLDS`, derived financials, evidence/document statuses. Sent at `temperature=0`, `response_format=json_object`. |
+| Validation | `validateGeenbankKredietworkflowFinancierJson()`. Invalid JSON or schema → `fallbackReason` is recorded and the adapter falls back to deterministic mock. |
+| Mapping | `mapKredietworkflowFinancierOutputToAppAnalysis()` derives `verdict` / `verdictSummary` / `confidenceScore` / `strongPoints` / `weakPoints` / `entrepreneurReport`. The canonical financier output is preserved untouched on `SkillInvocation.extras.canonical` for loan-officer review, future dual-view enrichment, and future moneycare memorandum generation. |
+| Central gate | `entrepreneurReport.canSubmit` is ANDed with `completeness/correctness/viability >= GATE_THRESHOLDS.*`. The LLM cannot promote `canSubmit` past the gate. The orchestrator-level `checkRunAnalysisGate` remains the binding source of truth at submit time. The applied decision is recorded under `extras.gateApplied` (`canSubmitFromMapper` vs `canSubmitAfterGate`). |
+| Pipeline hand-off | Today the canonical payload lives on `extras` only. `PipelineContext.creditWorkflowEnrichment` remains `null` from the orchestrator (next-step wiring); chained skills (`FinancingProductAdvisorDualView`, `MoneycareKredietmemorandum`) consume it as **enrichment**, never as sole authority. |
+| Other skills | Unchanged. Only the dual-view advisor has its own independent live path; `FinancingNeedAssessor` / `CreditProductAdvisor` / `MoneycareKredietmemorandum` remain mock. |
+| Observability | The *AI uitvoeringsdetails* panel shows: `Live OpenAI` (provider=openai, no `fallbackReason`, real `model`), `Fallback naar mock` (provider=openai, `fallbackReason` populated, `model=null`), or `Deterministisch / mock` (provider=mock). `model`, `durationMs`, `outputSummary`, and `extras.canonical` availability are all surfaced. |
+| Secrets | `OPENAI_API_KEY` is never persisted, never logged, and `runtime.scrubSecrets` defensively strips `sk-…`-style strings and `api_key`/`authorization`/`bearer` fields from `extras` / `inputSummary` / `outputSummary` / `errorMessage`. |
 
 #### Canonical credit-analysis framing (landed)
 

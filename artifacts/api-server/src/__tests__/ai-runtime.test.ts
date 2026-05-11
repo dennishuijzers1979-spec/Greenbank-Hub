@@ -59,6 +59,35 @@ import {
 import { mapKredietworkflowFinancierOutputToAppAnalysis } from "../lib/skills/geenbank-kredietworkflow-financier-mapper";
 
 const DUAL_PROVIDER_ENV = "AI_SKILL_FINANCINGPRODUCTADVISORDUALVIEW_PROVIDER";
+const KW_PROVIDER_ENV = "AI_SKILL_GEENBANKKREDIETWORKFLOW_PROVIDER";
+
+function withKwEnv<T>(
+  env: Record<string, string | undefined>,
+  fn: () => Promise<T> | T,
+): Promise<T> {
+  const keys = [
+    KW_PROVIDER_ENV,
+    "OPENAI_API_KEY",
+    "OPENAI_MODEL",
+    "AI_SKILL_PROVIDER",
+    "AI_SKILL_GEENBANKKREDIETWORKFLOW_MODEL",
+  ];
+  const saved: Record<string, string | undefined> = {};
+  for (const k of keys) saved[k] = process.env[k];
+  for (const k of keys) {
+    const v = env[k];
+    if (v === undefined) delete process.env[k];
+    else process.env[k] = v;
+  }
+  return Promise.resolve()
+    .then(fn)
+    .finally(() => {
+      for (const [k, v] of Object.entries(saved)) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+    });
+}
 
 function withDualEnv<T>(
   env: Record<string, string | undefined>,
@@ -1483,4 +1512,455 @@ test("mapper: blocking risk flag forces canSubmit=false even for Go decision", (
   assert.ok(
     mapped.blockingConditions.includes("Sanctielijst-treffer op UBO."),
   );
+});
+
+// --- GeenbankKredietworkflow LIVE OPENAI PILOT (env-gated) ----------------
+//
+// These tests exercise the per-skill OpenAI live path on the canonical
+// credit-analysis adapter. Real OpenAI is NEVER called — every test
+// either sets no env (mock path), sets provider=openai without a key
+// (resolver downgrades to mock), or injects a fake OpenAIChatClient via
+// `setOpenAIChatClientForTesting`. The central gate (`GATE_THRESHOLDS`)
+// MUST stay binding even when the live skill says canSubmit=true.
+
+function buildKwArgs(
+  dossier: typeof dossiersTable.$inferSelect,
+  overrides: Partial<{
+    completenessScore: number;
+    correctnessScore: number;
+    viabilityScore: number;
+    completedDocs: number;
+    requiredDocs: number;
+    margin: number;
+    dscr: number;
+    revenue: number;
+    profit: number;
+    requested: number;
+  }> = {},
+) {
+  return {
+    ctx: ctxFor(dossier),
+    completenessScore: 80,
+    correctnessScore: 80,
+    viabilityScore: 80,
+    completedDocs: 4,
+    requiredDocs: 4,
+    margin: 0.2,
+    dscr: 4.17,
+    revenue: 500000,
+    profit: 100000,
+    requested: 200000,
+    ...overrides,
+  };
+}
+
+test("kredietworkflow adapter stays on mock when no provider env is set", async () => {
+  const { dossierId } = await createDossier();
+  const [dossier] = await db
+    .select()
+    .from(dossiersTable)
+    .where(inArray(dossiersTable.id, [dossierId]));
+  await withKwEnv(
+    { [KW_PROVIDER_ENV]: undefined, OPENAI_API_KEY: undefined },
+    async () => {
+      const r = await GeenbankKredietworkflowAdapter.run(buildKwArgs(dossier));
+      assert.equal(r.ok, true);
+      assert.equal(r.usedMockMode, true);
+      assert.equal(r.invocation.usedMockMode, true);
+      assert.equal(r.invocation.model, null);
+      assert.equal(r.invocation.fallbackReason, null);
+      assert.equal(r.invocation.extras, null);
+    },
+  );
+});
+
+test("kredietworkflow adapter falls back to mock when provider=openai but key is missing", async () => {
+  const { dossierId } = await createDossier();
+  const [dossier] = await db
+    .select()
+    .from(dossiersTable)
+    .where(inArray(dossiersTable.id, [dossierId]));
+  await withKwEnv(
+    { [KW_PROVIDER_ENV]: "openai", OPENAI_API_KEY: undefined },
+    async () => {
+      const r = await GeenbankKredietworkflowAdapter.run(buildKwArgs(dossier));
+      assert.equal(r.usedMockMode, true);
+      assert.equal(r.invocation.usedMockMode, true);
+      assert.ok(
+        r.invocation.fallbackReason &&
+          /OPENAI_API_KEY/i.test(r.invocation.fallbackReason),
+        `expected fallbackReason to mention OPENAI_API_KEY, got ${r.invocation.fallbackReason}`,
+      );
+    },
+  );
+});
+
+function buildKwLiveResponse(
+  overrides: Partial<GeenbankKredietworkflowFinancierOutput> = {},
+): GeenbankKredietworkflowFinancierOutput {
+  return buildFinancierSample(overrides);
+}
+
+test("kredietworkflow adapter maps a valid live OpenAI response onto app fields and preserves canonical", async () => {
+  const { dossierId } = await createDossier();
+  const [dossier] = await db
+    .select()
+    .from(dossiersTable)
+    .where(inArray(dossiersTable.id, [dossierId]));
+  const liveResponse = buildKwLiveResponse();
+  setOpenAIChatClientForTesting(
+    makeFakeOpenAI(() => ({
+      content: JSON.stringify(liveResponse),
+      model: "gpt-4o-mini",
+    })),
+  );
+  try {
+    await withKwEnv(
+      { [KW_PROVIDER_ENV]: "openai", OPENAI_API_KEY: "sk-test-fake-1234567890" },
+      async () => {
+        const r = await GeenbankKredietworkflowAdapter.run(
+          buildKwArgs(dossier),
+        );
+        assert.equal(r.ok, true);
+        assert.equal(r.usedMockMode, false);
+        assert.equal(r.invocation.usedMockMode, false);
+        assert.equal(r.invocation.provider, "openai");
+        assert.equal(r.invocation.model, "gpt-4o-mini");
+        assert.equal(r.invocation.fallbackReason, null);
+        // Decision Go → app verdict kansrijk.
+        assert.equal(r.data.verdict, "kansrijk");
+        assert.equal(r.data.entrepreneurReport.canSubmit, true);
+        // Canonical financier output preserved on extras for officers.
+        const extras = r.invocation.extras as
+          | { canonical?: GeenbankKredietworkflowFinancierOutput }
+          | null;
+        assert.ok(extras && extras.canonical, "extras.canonical missing");
+        assert.equal(extras!.canonical!.decision, "Go");
+        assert.equal(extras!.canonical!.borrower.name, "Test BV");
+      },
+    );
+  } finally {
+    setOpenAIChatClientForTesting(null);
+  }
+});
+
+test("kredietworkflow adapter falls back to mock when OpenAI returns invalid JSON", async () => {
+  const { dossierId } = await createDossier();
+  const [dossier] = await db
+    .select()
+    .from(dossiersTable)
+    .where(inArray(dossiersTable.id, [dossierId]));
+  setOpenAIChatClientForTesting(
+    makeFakeOpenAI(() => ({ content: "definitely not json", model: "fake" })),
+  );
+  try {
+    await withKwEnv(
+      { [KW_PROVIDER_ENV]: "openai", OPENAI_API_KEY: "sk-test-fake-1234567890" },
+      async () => {
+        const r = await GeenbankKredietworkflowAdapter.run(
+          buildKwArgs(dossier),
+        );
+        assert.equal(r.usedMockMode, true);
+        assert.equal(r.invocation.usedMockMode, true);
+        assert.equal(r.invocation.provider, "openai");
+        assert.ok(
+          r.invocation.fallbackReason &&
+            /JSON|ongeldig|mislukt/i.test(r.invocation.fallbackReason),
+          `unexpected fallbackReason: ${r.invocation.fallbackReason}`,
+        );
+        // Fell back to deterministic mock — still returns an answer.
+        assert.ok(r.data.verdict);
+      },
+    );
+  } finally {
+    setOpenAIChatClientForTesting(null);
+  }
+});
+
+test("kredietworkflow adapter falls back to mock when OpenAI returns invalid schema", async () => {
+  const { dossierId } = await createDossier();
+  const [dossier] = await db
+    .select()
+    .from(dossiersTable)
+    .where(inArray(dossiersTable.id, [dossierId]));
+  setOpenAIChatClientForTesting(
+    makeFakeOpenAI(() => ({
+      content: JSON.stringify({ decision: "approved", borrower: {} }),
+      model: "fake",
+    })),
+  );
+  try {
+    await withKwEnv(
+      { [KW_PROVIDER_ENV]: "openai", OPENAI_API_KEY: "sk-test-fake-1234567890" },
+      async () => {
+        const r = await GeenbankKredietworkflowAdapter.run(
+          buildKwArgs(dossier),
+        );
+        assert.equal(r.usedMockMode, true);
+        assert.equal(r.invocation.provider, "openai");
+        assert.ok(
+          r.invocation.fallbackReason &&
+            /ongeldig|decision/i.test(r.invocation.fallbackReason),
+        );
+      },
+    );
+  } finally {
+    setOpenAIChatClientForTesting(null);
+  }
+});
+
+test("kredietworkflow adapter: live No Go → uitdagend + canSubmit false", async () => {
+  const { dossierId } = await createDossier();
+  const [dossier] = await db
+    .select()
+    .from(dossiersTable)
+    .where(inArray(dossiersTable.id, [dossierId]));
+  const liveResponse = buildKwLiveResponse({
+    decision: "No Go",
+    feasibilityAssessment: "niet haalbaar zoals aangevraagd",
+    decisionRationale: "DSCR onder 1,0 in alle scenario's.",
+  });
+  setOpenAIChatClientForTesting(
+    makeFakeOpenAI(() => ({
+      content: JSON.stringify(liveResponse),
+      model: "gpt-4o-mini",
+    })),
+  );
+  try {
+    await withKwEnv(
+      { [KW_PROVIDER_ENV]: "openai", OPENAI_API_KEY: "sk-test-fake-1234567890" },
+      async () => {
+        const r = await GeenbankKredietworkflowAdapter.run(
+          buildKwArgs(dossier),
+        );
+        assert.equal(r.usedMockMode, false);
+        assert.equal(r.data.verdict, "uitdagend");
+        assert.equal(r.data.entrepreneurReport.canSubmit, false);
+      },
+    );
+  } finally {
+    setOpenAIChatClientForTesting(null);
+  }
+});
+
+test("kredietworkflow adapter: live Conditional Go → voorwaardelijk", async () => {
+  const { dossierId } = await createDossier();
+  const [dossier] = await db
+    .select()
+    .from(dossiersTable)
+    .where(inArray(dossiersTable.id, [dossierId]));
+  const liveResponse = buildKwLiveResponse({
+    decision: "Conditional Go",
+    feasibilityAssessment: "haalbaar onder voorwaarden",
+  });
+  setOpenAIChatClientForTesting(
+    makeFakeOpenAI(() => ({
+      content: JSON.stringify(liveResponse),
+      model: "gpt-4o-mini",
+    })),
+  );
+  try {
+    await withKwEnv(
+      { [KW_PROVIDER_ENV]: "openai", OPENAI_API_KEY: "sk-test-fake-1234567890" },
+      async () => {
+        const r = await GeenbankKredietworkflowAdapter.run(
+          buildKwArgs(dossier),
+        );
+        assert.equal(r.usedMockMode, false);
+        assert.equal(r.data.verdict, "voorwaardelijk");
+        assert.equal(r.data.entrepreneurReport.canSubmit, false);
+      },
+    );
+  } finally {
+    setOpenAIChatClientForTesting(null);
+  }
+});
+
+test("kredietworkflow adapter: central gate stays binding — Go from LLM cannot bypass GATE_THRESHOLDS", async () => {
+  const { dossierId } = await createDossier();
+  const [dossier] = await db
+    .select()
+    .from(dossiersTable)
+    .where(inArray(dossiersTable.id, [dossierId]));
+  // Live skill says decision=Go (would map to canSubmit=true) BUT the
+  // current scores are below the gate thresholds. The adapter MUST
+  // overwrite canSubmit to false.
+  const liveResponse = buildKwLiveResponse({ decision: "Go" });
+  setOpenAIChatClientForTesting(
+    makeFakeOpenAI(() => ({
+      content: JSON.stringify(liveResponse),
+      model: "gpt-4o-mini",
+    })),
+  );
+  try {
+    await withKwEnv(
+      { [KW_PROVIDER_ENV]: "openai", OPENAI_API_KEY: "sk-test-fake-1234567890" },
+      async () => {
+        const r = await GeenbankKredietworkflowAdapter.run(
+          buildKwArgs(dossier, {
+            completenessScore: 10,
+            correctnessScore: 10,
+            viabilityScore: 10,
+          }),
+        );
+        assert.equal(r.usedMockMode, false);
+        assert.equal(r.data.verdict, "kansrijk");
+        // Gate binding: canSubmit must be FALSE despite live Go.
+        assert.equal(r.data.entrepreneurReport.canSubmit, false);
+        const extras = r.invocation.extras as {
+          gateApplied?: {
+            canSubmitFromMapper?: boolean;
+            canSubmitAfterGate?: boolean;
+          };
+        } | null;
+        assert.ok(extras?.gateApplied);
+        assert.equal(extras!.gateApplied!.canSubmitFromMapper, true);
+        assert.equal(extras!.gateApplied!.canSubmitAfterGate, false);
+      },
+    );
+  } finally {
+    setOpenAIChatClientForTesting(null);
+  }
+});
+
+test("kredietworkflow adapter never leaks OPENAI_API_KEY into the SkillInvocation", async () => {
+  const { dossierId } = await createDossier();
+  const [dossier] = await db
+    .select()
+    .from(dossiersTable)
+    .where(inArray(dossiersTable.id, [dossierId]));
+  const secretKey = "sk-test-kwsecretvalue-shouldnotleak-9999999999";
+  const liveResponse = {
+    ...buildKwLiveResponse({
+      decisionRationale: `key=${secretKey}`,
+    }),
+    api_key: secretKey,
+    authorization: `Bearer ${secretKey}`,
+  };
+  setOpenAIChatClientForTesting(
+    makeFakeOpenAI(() => ({
+      content: JSON.stringify(liveResponse),
+      model: "gpt-4o-mini",
+    })),
+  );
+  try {
+    await withKwEnv(
+      { [KW_PROVIDER_ENV]: "openai", OPENAI_API_KEY: secretKey },
+      async () => {
+        const r = await GeenbankKredietworkflowAdapter.run(
+          buildKwArgs(dossier),
+        );
+        const serialized = JSON.stringify(r.invocation);
+        assert.ok(!serialized.includes(secretKey), "raw secret key leaked");
+        assert.ok(
+          !/sk-test-kwsecretvalue-shouldnotleak/.test(serialized),
+          "raw secret prefix leaked",
+        );
+      },
+    );
+  } finally {
+    setOpenAIChatClientForTesting(null);
+  }
+});
+
+test("kredietworkflow live pilot does NOT promote other adapters; dual-view stays independently live-capable", async () => {
+  const { dossierId } = await createDossier();
+  const [dossier] = await db
+    .select()
+    .from(dossiersTable)
+    .where(inArray(dossiersTable.id, [dossierId]));
+  // Set ONLY the kredietworkflow per-skill provider env. Explicitly
+  // scrub the dual-view per-skill env so a leaked value from earlier
+  // tests cannot make the dual-view adapter go live in this scenario.
+  // The four other adapters must remain on mock and must NOT call the
+  // OpenAI client just because the kredietworkflow env is set.
+  let openAiCalls = 0;
+  setOpenAIChatClientForTesting(
+    makeFakeOpenAI(() => {
+      openAiCalls += 1;
+      throw new Error("only kredietworkflow should call OpenAI in this test");
+    }),
+  );
+  const savedDual = process.env[DUAL_PROVIDER_ENV];
+  delete process.env[DUAL_PROVIDER_ENV];
+  try {
+    await withKwEnv(
+      {
+        [KW_PROVIDER_ENV]: "openai",
+        OPENAI_API_KEY: "sk-test-fake-1234567890",
+      },
+      async () => {
+        const ctx = ctxFor(dossier);
+        const need = await FinancingNeedAssessorAdapter.run(ctx);
+        const credit = await CreditProductAdvisorAdapter.run(ctx);
+        const dual = await FinancingProductAdvisorDualViewAdapter.run(ctx);
+        // None of these should have hit the (throwing) fake.
+        assert.equal(openAiCalls, 0, "non-pilot adapters must not call OpenAI");
+        assert.equal(need.usedMockMode, true);
+        assert.equal(credit.usedMockMode, true);
+        assert.equal(dual.usedMockMode, true);
+      },
+    );
+  } finally {
+    setOpenAIChatClientForTesting(null);
+    if (savedDual === undefined) delete process.env[DUAL_PROVIDER_ENV];
+    else process.env[DUAL_PROVIDER_ENV] = savedDual;
+  }
+});
+
+test("dual-view adapter remains live-capable with its own per-skill provider env (regression)", async () => {
+  const { dossierId } = await createDossier();
+  const [dossier] = await db
+    .select()
+    .from(dossiersTable)
+    .where(inArray(dossiersTable.id, [dossierId]));
+  setOpenAIChatClientForTesting(
+    makeFakeOpenAI(() => ({
+      content: JSON.stringify({
+        entrepreneur_view: {
+          summary: "OK",
+          strengths: [],
+          weaknesses: [],
+          financeability_score: 7,
+          submission_readiness_score: 7,
+          cta_status: "ready_to_submit",
+          todo_minimum: [],
+          todo_optimal: [],
+        },
+        partner_view: {
+          recommended_product: "loan",
+          alternative_product: "",
+          recommended_product_mix: [],
+          recommendation_status: "strong",
+          rationale: [],
+          key_risks: [],
+          evidence_gaps: [],
+          indicative_structure: {
+            amount: 200000,
+            tenor_months: 60,
+            repayment_logic: "annuiteit",
+            collateral_logic: "borg",
+            conditions: [],
+          },
+          shortlisted_products: [],
+        },
+      }),
+      model: "gpt-4o-mini",
+    })),
+  );
+  try {
+    await withDualEnv(
+      { [DUAL_PROVIDER_ENV]: "openai", OPENAI_API_KEY: "sk-test-fake-1234567890" },
+      async () => {
+        const r = await FinancingProductAdvisorDualViewAdapter.run(
+          ctxFor(dossier),
+        );
+        assert.equal(r.usedMockMode, false);
+        assert.equal(r.invocation.provider, "openai");
+        assert.equal(r.invocation.model, "gpt-4o-mini");
+      },
+    );
+  } finally {
+    setOpenAIChatClientForTesting(null);
+  }
 });
