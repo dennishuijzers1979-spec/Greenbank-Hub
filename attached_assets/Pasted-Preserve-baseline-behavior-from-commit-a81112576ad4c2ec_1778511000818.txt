@@ -1,0 +1,93 @@
+Preserve baseline behavior from commit a81112576ad4c2ec4b8c37588ef015636c36479d.
+
+Runtime verification result:
+GeenbankKredietworkflow live OpenAI call works, but the response failed schema validation because borrower.name was empty.
+Root cause: demo/seed dossier for Anne/Brouwerij Noord has companyName: null, and the adapter forwarded that missing company identity into the OpenAI prompt.
+
+Do not change gate thresholds.
+Do not weaken the schema validator.
+Do not accept empty borrower.name.
+Do not mask real missing identity as a valid borrower.
+
+Task: Fix company identity normalization for GeenbankKredietworkflow input.
+
+1. Seed/demo data
+
+Ensure the Anne / Brouwerij Noord demo prospect/dossier has a non-empty companyName:
+- Brouwerij Noord B.V.
+
+Check other seed/demo dossiers too:
+- no ready-for-analysis or submitted demo dossier should have missing companyName
+- incomplete/blocked demo dossiers may be incomplete, but if they are intended for AI analysis they must have company identity
+
+2. Adapter input normalization
+
+Before calling OpenAI from GeenbankKredietworkflowAdapter:
+- derive borrower/company name from the best available source:
+  - prospect.companyName
+  - dossier company fields if present
+  - normalized case data if present
+- trim whitespace
+- if still missing, do not call OpenAI
+- fall back to deterministic mock with fallbackReason:
+  "Bedrijfsidentiteit ontbreekt; live kredietworkflow niet uitgevoerd."
+
+Do not substitute fake names like "Onbekend" for a live credit workflow call.
+For live calls, borrower.name must be real and non-empty.
+
+3. Blocking condition / readiness
+
+If company identity is missing for a dossier that tries to run full AI analysis:
+- ensure this is surfaced as a blocking condition or clear validation reason where appropriate
+- do not let live kredietworkflow pretend the dossier is complete
+
+4. Tests
+
+Add/update tests for:
+- seed ready/submitted demo dossier has companyName
+- adapter does not call OpenAI when companyName is missing
+- missing companyName produces mock fallback with clear fallbackReason
+- valid companyName allows OpenAI client to be called in test
+- validator still rejects empty borrower.name
+- no regression in dual-view live behavior
+
+Do not call real OpenAI in tests.
+
+5. Runtime verification after fix
+
+After code/data changes:
+- restart app
+- rerun pre-validation and full analysis on Brouwerij Noord
+- verify GeenbankKredietworkflow now returns:
+  - provider=openai
+  - usedMockMode=false
+  - fallbackReason=null
+  - extras.canonical present
+  - borrower.name = Brouwerij Noord B.V.
+- verify dual-view still works
+- verify gate/report stability
+
+6. Run checks
+
+Run:
+node scripts/check-skill-packs.mjs
+pnpm --filter @workspace/api-server run test
+pnpm run typecheck
+pnpm run build
+
+7. Commit and push
+
+Commit with:
+
+Geenbank Hub: normalize company identity for kredietworkflow
+
+8. Report back
+
+Report:
+- changed files
+- root cause fixed
+- test/typecheck/build output
+- runtime verification result
+- whether GeenbankKredietworkflow is now truly live without fallback
+- gate stability
+- remaining risks

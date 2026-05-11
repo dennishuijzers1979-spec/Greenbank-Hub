@@ -51,7 +51,21 @@ export function pct(n: number): number {
 export type SkillContext = {
   dossier: Dossier;
   documents: Document[];
+  /**
+   * Display-friendly company label. May fall back to a placeholder
+   * (e.g. "Onbekend") when the prospect profile has no company name —
+   * safe for mock copy and UI strings, but MUST NOT be sent as a real
+   * borrower identity to a live skill. Use `borrowerName` for that.
+   */
   companyName: string;
+  /**
+   * Real, normalized borrower identity for live credit-workflow calls.
+   * Trimmed prospect company name, or `null` when missing/empty.
+   * Live adapters MUST refuse to call the LLM when this is `null` —
+   * never substitute a fake name like "Onbekend" for a real credit
+   * decision.
+   */
+  borrowerName: string | null;
 };
 
 export type SkillResult<T> = {

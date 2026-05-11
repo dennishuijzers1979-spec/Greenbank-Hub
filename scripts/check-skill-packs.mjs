@@ -83,7 +83,7 @@ const IMPORTED_SKILLS = [
     // Mapping markers proving the repo integration notes + mismatch
     // documentation are present and not silently dropped.
     requiredMappingMarkers: [
-      "Repo integration notes (forward-only — adapter still on mock)",
+      "Repo integration notes (live-capable, env-gated)",
       "Mapping mismatch with the prepared adapter schema",
       "creditWorkflowContext",
       "AI_SKILL_GEENBANKKREDIETWORKFLOW_PROVIDER",

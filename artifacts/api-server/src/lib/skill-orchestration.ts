@@ -270,10 +270,17 @@ class SkillOrchestrationService {
       .select()
       .from(documentsTable)
       .where(eq(documentsTable.dossierId, dossierId));
+    const rawCompany = prospect?.companyName?.trim() ?? "";
     return {
       dossier,
       documents,
-      companyName: prospect?.companyName ?? "Onbekend",
+      // Display label: keep the historical "Onbekend" placeholder so
+      // mock copy / UI strings stay safe when the prospect profile
+      // has no company name yet.
+      companyName: rawCompany || "Onbekend",
+      // Real borrower identity for live skills: null when missing.
+      // Live adapters MUST refuse to call the LLM in that case.
+      borrowerName: rawCompany || null,
     };
   }
 

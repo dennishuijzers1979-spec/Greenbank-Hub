@@ -214,8 +214,18 @@ async function createDossier(status = "submitted_to_geenbank") {
   return { dossierId: dossier.id, prospectId: prospect.id, userId };
 }
 
-function ctxFor(dossier: typeof dossiersTable.$inferSelect) {
-  return { dossier, documents: [], companyName: "Test BV" };
+function ctxFor(
+  dossier: typeof dossiersTable.$inferSelect,
+  overrides: { companyName?: string; borrowerName?: string | null } = {},
+) {
+  const companyName = overrides.companyName ?? "Test BV";
+  const borrowerName =
+    overrides.borrowerName === undefined
+      ? companyName === "Onbekend"
+        ? null
+        : companyName
+      : overrides.borrowerName;
+  return { dossier, documents: [], companyName, borrowerName };
 }
 
 // --- Runtime resolver -------------------------------------------------------
@@ -275,12 +285,14 @@ test("OPENAI_API_KEY alone does NOT auto-promote skills to live (honesty rule)",
     AI_API_KEY: process.env.AI_API_KEY,
     AI_SKILL_ENDPOINT: process.env.AI_SKILL_ENDPOINT,
     [DUAL_PROVIDER_ENV]: process.env[DUAL_PROVIDER_ENV],
+    [KW_PROVIDER_ENV]: process.env[KW_PROVIDER_ENV],
   };
   delete process.env.AI_SKILL_PROVIDER;
   delete process.env.ANTHROPIC_API_KEY;
   delete process.env.AI_API_KEY;
   delete process.env.AI_SKILL_ENDPOINT;
   delete process.env[DUAL_PROVIDER_ENV];
+  delete process.env[KW_PROVIDER_ENV];
   process.env.OPENAI_API_KEY = "sk-test-fake-1234567890";
   try {
     // Every skill — including the dual-view one without its per-skill
@@ -308,8 +320,10 @@ test("only the per-skill PROVIDER override promotes a single skill to live (conf
     AI_SKILL_PROVIDER: process.env.AI_SKILL_PROVIDER,
     OPENAI_API_KEY: process.env.OPENAI_API_KEY,
     [DUAL_PROVIDER_ENV]: process.env[DUAL_PROVIDER_ENV],
+    [KW_PROVIDER_ENV]: process.env[KW_PROVIDER_ENV],
   };
   delete process.env.AI_SKILL_PROVIDER;
+  delete process.env[KW_PROVIDER_ENV];
   process.env.OPENAI_API_KEY = "sk-test-fake-1234567890";
   process.env[DUAL_PROVIDER_ENV] = "openai";
   try {
@@ -1859,6 +1873,120 @@ test("kredietworkflow adapter: central gate stays binding — Go from LLM cannot
   } finally {
     setOpenAIChatClientForTesting(null);
   }
+});
+
+test("kredietworkflow adapter does NOT call OpenAI when borrower identity is missing — falls back to mock with explicit reason", async () => {
+  const { dossierId } = await createDossier();
+  const [dossier] = await db
+    .select()
+    .from(dossiersTable)
+    .where(inArray(dossiersTable.id, [dossierId]));
+  let openAiCalls = 0;
+  setOpenAIChatClientForTesting(
+    makeFakeOpenAI(() => {
+      openAiCalls += 1;
+      throw new Error("must not be called when borrower identity is missing");
+    }),
+  );
+  try {
+    await withKwEnv(
+      { [KW_PROVIDER_ENV]: "openai", OPENAI_API_KEY: "sk-test-fake-1234567890" },
+      async () => {
+        // borrowerName=null simulates a prospect profile without
+        // companyName. The adapter MUST refuse the live call.
+        const args = {
+          ...buildKwArgs(dossier),
+          ctx: ctxFor(dossier, { companyName: "Onbekend", borrowerName: null }),
+        };
+        const r = await GeenbankKredietworkflowAdapter.run(args);
+        assert.equal(openAiCalls, 0, "OpenAI must not be called");
+        assert.equal(r.usedMockMode, true);
+        assert.equal(r.invocation.usedMockMode, true);
+        assert.equal(r.invocation.provider, "openai");
+        assert.equal(
+          r.invocation.fallbackReason,
+          "Bedrijfsidentiteit ontbreekt; live kredietworkflow niet uitgevoerd.",
+        );
+        // Mock output still produced and gate-applied.
+        assert.ok(r.data.verdict);
+        assert.ok(r.data.entrepreneurReport);
+      },
+    );
+  } finally {
+    setOpenAIChatClientForTesting(null);
+  }
+});
+
+test("kredietworkflow adapter sends borrower.name (not companyName) in the live payload", async () => {
+  const { dossierId } = await createDossier();
+  const [dossier] = await db
+    .select()
+    .from(dossiersTable)
+    .where(inArray(dossiersTable.id, [dossierId]));
+  let capturedPayload: { borrower?: { name?: unknown; companyName?: unknown } } | null =
+    null;
+  setOpenAIChatClientForTesting(
+    makeFakeOpenAI((req) => {
+      const r = req as { messages: { role: string; content: string }[] };
+      const userMsg = r.messages.find((m) => m.role === "user");
+      const json = userMsg!.content.slice(userMsg!.content.indexOf("{"));
+      capturedPayload = JSON.parse(json);
+      return { content: JSON.stringify(buildFinancierSample()), model: "fake" };
+    }),
+  );
+  try {
+    await withKwEnv(
+      { [KW_PROVIDER_ENV]: "openai", OPENAI_API_KEY: "sk-test-fake-1234567890" },
+      async () => {
+        const args = {
+          ...buildKwArgs(dossier),
+          // Whitespace must be trimmed before reaching the LLM.
+          ctx: ctxFor(dossier, {
+            companyName: "  Brouwerij Noord B.V.  ",
+            borrowerName: "  Brouwerij Noord B.V.  ",
+          }),
+        };
+        const r = await GeenbankKredietworkflowAdapter.run(args);
+        assert.equal(r.usedMockMode, false);
+        assert.ok(capturedPayload, "payload not captured");
+        assert.equal(capturedPayload!.borrower?.name, "Brouwerij Noord B.V.");
+        // Old field name must NOT be present — the schema expects `name`.
+        assert.equal(capturedPayload!.borrower?.companyName, undefined);
+      },
+    );
+  } finally {
+    setOpenAIChatClientForTesting(null);
+  }
+});
+
+test("validateGeenbankKredietworkflowFinancierJson still rejects empty borrower.name (not weakened)", () => {
+  const sample = buildFinancierSample();
+  const bad = { ...sample, borrower: { ...sample.borrower, name: "" } };
+  const problem = validateGeenbankKredietworkflowFinancierJson(bad);
+  assert.ok(problem && /borrower\.name/i.test(problem));
+  const bad2 = { ...sample, borrower: { ...sample.borrower, name: "   " } };
+  const problem2 = validateGeenbankKredietworkflowFinancierJson(bad2);
+  assert.ok(problem2 && /borrower\.name/i.test(problem2));
+});
+
+test("seed.ts: every demo prospect profile insert has a non-empty companyName literal", async () => {
+  const fs = await import("node:fs/promises");
+  const path = await import("node:path");
+  const seedSrc = await fs.readFile(
+    path.resolve("src/lib/seed.ts"),
+    "utf8",
+  );
+  // Find every `companyName: "..."` literal under prospectProfilesTable inserts.
+  const matches = [...seedSrc.matchAll(/companyName:\s*"([^"]*)"/g)];
+  assert.ok(matches.length >= 3, "expected at least 3 seeded prospect profiles");
+  for (const m of matches) {
+    assert.ok(m[1].trim().length > 0, `seed has empty companyName literal: ${m[0]}`);
+  }
+  // Anne / Brouwerij Noord must be present and a real company name.
+  assert.ok(
+    seedSrc.includes('companyName: "Brouwerij Noord B.V."'),
+    "Anne/Brouwerij Noord seed prospect must have companyName 'Brouwerij Noord B.V.'",
+  );
 });
 
 test("kredietworkflow adapter never leaks OPENAI_API_KEY into the SkillInvocation", async () => {
