@@ -30,9 +30,11 @@ import type {
   Dossier,
   DossierListItem,
   DownloadDocument404,
+  DualViewAdvice,
   EntrepreneurReport,
   FinancierReport,
   GateBlockedError,
+  GetDualViewAdvice404,
   HealthStatus,
   IntakeUpdate,
   IntegrationsStatus,
@@ -1882,6 +1884,95 @@ export function useGetFinancierReport<
   },
 ): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
   const queryOptions = getGetFinancierReportQueryOptions(dossierId, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Get internal FinancingProductAdvisorDualView product advice (loan officers/admins only)
+ */
+export const getGetDualViewAdviceUrl = (dossierId: string) => {
+  return `/api/dossiers/${dossierId}/dual-view-advice`;
+};
+
+export const getDualViewAdvice = async (
+  dossierId: string,
+  options?: RequestInit,
+): Promise<DualViewAdvice> => {
+  return customFetch<DualViewAdvice>(getGetDualViewAdviceUrl(dossierId), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetDualViewAdviceQueryKey = (dossierId: string) => {
+  return [`/api/dossiers/${dossierId}/dual-view-advice`] as const;
+};
+
+export const getGetDualViewAdviceQueryOptions = <
+  TData = Awaited<ReturnType<typeof getDualViewAdvice>>,
+  TError = ErrorType<GetDualViewAdvice404>,
+>(
+  dossierId: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getDualViewAdvice>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetDualViewAdviceQueryKey(dossierId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getDualViewAdvice>>
+  > = ({ signal }) =>
+    getDualViewAdvice(dossierId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!dossierId,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getDualViewAdvice>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetDualViewAdviceQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getDualViewAdvice>>
+>;
+export type GetDualViewAdviceQueryError = ErrorType<GetDualViewAdvice404>;
+
+/**
+ * @summary Get internal FinancingProductAdvisorDualView product advice (loan officers/admins only)
+ */
+
+export function useGetDualViewAdvice<
+  TData = Awaited<ReturnType<typeof getDualViewAdvice>>,
+  TError = ErrorType<GetDualViewAdvice404>,
+>(
+  dossierId: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getDualViewAdvice>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetDualViewAdviceQueryOptions(dossierId, options);
 
   const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
     queryKey: QueryKey;

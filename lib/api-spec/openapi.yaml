@@ -377,6 +377,32 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/FinancierReport" }
 
+  /dossiers/{dossierId}/dual-view-advice:
+    get:
+      operationId: getDualViewAdvice
+      tags: [reports]
+      summary: Get internal FinancingProductAdvisorDualView product advice (loan officers/admins only)
+      parameters:
+        - in: path
+          name: dossierId
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Internal product advice extracted from the latest analysis run
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DualViewAdvice" }
+        "404":
+          description: No analysis run yet, or no dual-view advice available
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error: { type: string }
+                required: [error]
+
   /dossiers/{dossierId}/memorandum:
     post:
       operationId: generateMemorandum
@@ -986,6 +1012,96 @@ components:
         - riskFactors
         - strengths
         - recommendation
+
+    DualViewAdviceShortlistedProduct:
+      type: object
+      properties:
+        product_name: { type: string }
+        product_fit_score: { type: number, nullable: true }
+        evidence_strength_score: { type: number, nullable: true }
+        structurability_score: { type: number, nullable: true }
+        notes:
+          type: array
+          items: { type: string }
+      required: [product_name]
+
+    DualViewAdviceIndicativeStructure:
+      type: object
+      properties:
+        amount: { type: number, nullable: true }
+        tenor_months: { type: number, nullable: true }
+        repayment_logic: { type: string, nullable: true }
+        collateral_logic: { type: string, nullable: true }
+        conditions:
+          type: array
+          items: { type: string }
+
+    DualViewAdvicePartnerView:
+      type: object
+      properties:
+        recommended_product: { type: string, nullable: true }
+        alternative_product: { type: string, nullable: true }
+        recommended_product_mix:
+          type: array
+          items: { type: string }
+        recommendation_status:
+          type: string
+          nullable: true
+          enum: [strong, provisional, weak, null]
+        rationale:
+          type: array
+          items: { type: string }
+        key_risks:
+          type: array
+          items: { type: string }
+        evidence_gaps:
+          type: array
+          items: { type: string }
+        indicative_structure:
+          allOf:
+            - $ref: "#/components/schemas/DualViewAdviceIndicativeStructure"
+          nullable: true
+        shortlisted_products:
+          type: array
+          items: { $ref: "#/components/schemas/DualViewAdviceShortlistedProduct" }
+
+    DualViewAdviceEntrepreneurSummary:
+      type: object
+      properties:
+        summary: { type: string, nullable: true }
+        financeability_score: { type: number, nullable: true }
+        submission_readiness_score: { type: number, nullable: true }
+        cta_status: { type: string, nullable: true }
+
+    DualViewAdvice:
+      type: object
+      properties:
+        dossierId: { type: string }
+        runId: { type: string, nullable: true }
+        provider: { type: string }
+        executionMode:
+          type: string
+          enum: [live_openai, deterministic_mock, fallback_mock]
+        model: { type: string, nullable: true }
+        generatedAt: { type: string, nullable: true }
+        durationMs: { type: number, nullable: true }
+        fallbackReason: { type: string, nullable: true }
+        partnerView: { $ref: "#/components/schemas/DualViewAdvicePartnerView" }
+        entrepreneurSummary:
+          allOf:
+            - $ref: "#/components/schemas/DualViewAdviceEntrepreneurSummary"
+          nullable: true
+        partial: { type: boolean }
+        warnings:
+          type: array
+          items: { type: string }
+      required:
+        - dossierId
+        - provider
+        - executionMode
+        - partnerView
+        - partial
+        - warnings
 
     CreditMemorandum:
       type: object

@@ -10,9 +10,11 @@ import {
   ListDossierRunsParams,
   GetLatestRunParams,
   GetFinancierReportParams,
+  GetDualViewAdviceParams,
   GenerateMemorandumParams,
   GetMemorandumParams,
 } from "@workspace/api-zod";
+import { extractDualViewAdvice } from "../lib/skills/dual-view-advice";
 import { requireAuth } from "../lib/auth";
 import { logActivity } from "../lib/activity";
 import { serializeRun } from "../lib/serializers";
@@ -262,6 +264,45 @@ router.get(
       viabilityScore: run.viabilityScore,
       confidenceScore: run.confidenceScore,
     });
+  },
+);
+
+router.get(
+  "/dossiers/:dossierId/dual-view-advice",
+  requireAuth(["loan_officer", "admin"]),
+  async (req, res): Promise<void> => {
+    const params = GetDualViewAdviceParams.safeParse(req.params);
+    if (!params.success) {
+      res.status(400).json({ error: params.error.message });
+      return;
+    }
+    if (!(await officerCanAccessDossier(params.data.dossierId))) {
+      res.status(404).json({ error: "Dossier niet gevonden" });
+      return;
+    }
+    // We do NOT just take the absolute latest run, because a more recent
+    // memorandum run typically has no FinancingProductAdvisorDualView
+    // invocation. Walk newest-first and return the first run that yields
+    // an advice payload — that is the freshest dual-view skill output.
+    const runs = await db
+      .select()
+      .from(aiAnalysisRunsTable)
+      .where(eq(aiAnalysisRunsTable.dossierId, params.data.dossierId))
+      .orderBy(desc(aiAnalysisRunsTable.startedAt));
+    if (runs.length === 0) {
+      res.status(404).json({ error: "Geen analyse-run gevonden" });
+      return;
+    }
+    for (const run of runs) {
+      const advice = extractDualViewAdvice(params.data.dossierId, run);
+      if (advice) {
+        res.json(advice);
+        return;
+      }
+    }
+    res
+      .status(404)
+      .json({ error: "Geen FinancingProductAdvisorDualView-uitvoer gevonden" });
   },
 );
 

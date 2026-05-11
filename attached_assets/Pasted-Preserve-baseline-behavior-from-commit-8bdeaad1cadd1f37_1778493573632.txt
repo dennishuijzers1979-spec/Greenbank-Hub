@@ -1,0 +1,186 @@
+Preserve baseline behavior from commit 8bdeaad1cadd1f374c79391bf945aceb5e323e3f.
+
+Runtime verified state:
+- FinancingProductAdvisorDualView is live via OpenAI when explicitly configured.
+- Exactly 1/5 skills is live.
+- The other four adapters remain Deterministisch / mock.
+- AI execution labels are honest.
+- Gate/scoring/report stability was verified after the live run.
+- Do not enable another live skill in this task.
+
+Do not regress:
+- gate tests
+- typed 409 payloads
+- upload gating
+- AI analysis gating
+- submit gating
+- officer visibility
+- RBAC
+- document download permissions
+- Dutch UI language
+- server-side-only skill invocation
+- mock fallback behavior
+- AI skill invocation observability
+- honest execution labels
+- OpenAI fallback safety
+
+Task: Surface the live FinancingProductAdvisorDualView partner_view in the loan officer dossier review.
+
+Goal:
+Use the already-working live OpenAI output for internal loan officer review, without changing the central gate, scoring, or prospect-facing report.
+
+1. Backend: expose safe dualViewAdvice for internal users
+
+From the latest full_analysis AIAnalysisRun:
+- inspect skillInvocations
+- find skillName/module FinancingProductAdvisorDualView
+- if extras.response.partner_view exists, expose it as a typed internal dualViewAdvice object
+- include relevant entrepreneur_view fields only if useful for internal context
+
+Expose this only through authenticated loan_officer/admin routes.
+Do not expose raw prompts, API keys, auth headers, raw request bodies, or secrets.
+Scrub defensively.
+
+2. Type the response
+
+Add or update API/OpenAPI/generated types for dualViewAdvice.
+
+It should safely include:
+- provider
+- executionMode: live_openai | deterministic_mock | fallback_mock
+- model
+- generatedAt
+- durationMs
+- fallbackReason
+- partner_view:
+  - recommended_product
+  - alternative_product
+  - recommended_product_mix
+  - recommendation_status
+  - rationale
+  - key_risks
+  - evidence_gaps
+  - indicative_structure
+  - shortlisted_products
+- optional entrepreneur_view summary fields if needed:
+  - financeability_score
+  - submission_readiness_score
+  - cta_status
+  - summary
+
+3. Loan officer UI: add “Financier productadvies”
+
+In the dossier detail / financier report area, add a polished internal section titled:
+
+Financier productadvies
+
+Show:
+- recommended product
+- alternative product
+- recommended product mix
+- recommendation status badge: strong / provisional / weak
+- rationale bullets
+- key risks
+- evidence gaps
+- indicative structure:
+  - amount
+  - tenor_months
+  - repayment_logic
+  - collateral_logic
+  - conditions
+- shortlisted products table:
+  - product_name
+  - product_fit_score
+  - evidence_strength_score
+  - structurability_score
+  - notes
+
+Use Dutch labels and clear financial-review layout.
+Keep machine enum values if needed, but explain with Dutch labels.
+
+4. Source and trust context
+
+Show an internal metadata row:
+- bron: FinancingProductAdvisorDualView
+- uitvoering: Live OpenAI / Deterministisch mock / Fallback naar mock
+- model
+- gegenereerd op
+- duur
+- fallbackReason if present
+
+If it is mock or fallback:
+- clearly label the advice as indicatief/mock
+- do not make it look like a live AI recommendation
+
+5. Empty and partial states
+
+If no dualViewAdvice exists:
+Show:
+“Nog geen live productadvies beschikbaar.”
+
+Add internal helper text:
+“Run de volledige AI-analyse opnieuw nadat de OpenAI-provider is ingeschakeld.”
+
+If the JSON is incomplete:
+- render available fields
+- show warning:
+“Productadvies is onvolledig; controleer AI-uitvoeringsdetails.”
+
+6. Keep prospect side conservative
+
+Do not expose the full partner_view to prospects.
+Do not change the entrepreneur report in this task.
+
+7. Do not change gate/scoring
+
+Do not change:
+- checkRunAnalysisGate
+- viabilityScore mapping
+- margin/dscr/revenue/profit/requested derivation
+- submit gate
+- officer visibility
+- RBAC
+
+8. Tests
+
+Add focused backend tests for:
+- dualViewAdvice extraction from SkillInvocation.extras.response
+- no dualViewAdvice when extras missing
+- mock/fallback metadata preserved
+- no secret-like fields exposed
+- only loan_officer/admin routes expose this internal advice
+
+If practical, add frontend type/render coverage or keep typecheck strict.
+
+9. README update
+
+Document:
+- where loan officers see the live product advice
+- that it is internal decision support
+- that the central gate remains deterministic
+- how live vs mock/fallback is labeled
+
+10. Run checks
+
+Run:
+pnpm --filter @workspace/api-server run test
+pnpm run typecheck
+pnpm run build
+node scripts/check-skill-packs.mjs
+
+11. Commit and push
+
+Commit with:
+
+Geenbank Hub: surface dual-view product advice for officers
+
+12. Report back
+
+Report:
+- changed files
+- test/typecheck/build output
+- where the productadvies appears
+- how live vs mock/fallback is labeled
+- whether prospect UI stayed unchanged
+- whether gate/scoring stayed unchanged
+- known limitations or risks

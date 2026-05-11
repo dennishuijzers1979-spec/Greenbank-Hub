@@ -269,6 +269,75 @@ export interface FinancierReport {
   confidenceScore?: number | null;
 }
 
+export interface DualViewAdviceShortlistedProduct {
+  product_name: string;
+  product_fit_score?: number | null;
+  evidence_strength_score?: number | null;
+  structurability_score?: number | null;
+  notes?: string[];
+}
+
+export interface DualViewAdviceIndicativeStructure {
+  amount?: number | null;
+  tenor_months?: number | null;
+  repayment_logic?: string | null;
+  collateral_logic?: string | null;
+  conditions?: string[];
+}
+
+export type DualViewAdvicePartnerViewRecommendationStatus =
+  | (typeof DualViewAdvicePartnerViewRecommendationStatus)[keyof typeof DualViewAdvicePartnerViewRecommendationStatus]
+  | null;
+
+export const DualViewAdvicePartnerViewRecommendationStatus = {
+  strong: "strong",
+  provisional: "provisional",
+  weak: "weak",
+} as const;
+
+export interface DualViewAdvicePartnerView {
+  recommended_product?: string | null;
+  alternative_product?: string | null;
+  recommended_product_mix?: string[];
+  recommendation_status?: DualViewAdvicePartnerViewRecommendationStatus;
+  rationale?: string[];
+  key_risks?: string[];
+  evidence_gaps?: string[];
+  indicative_structure?: DualViewAdviceIndicativeStructure | null;
+  shortlisted_products?: DualViewAdviceShortlistedProduct[];
+}
+
+export interface DualViewAdviceEntrepreneurSummary {
+  summary?: string | null;
+  financeability_score?: number | null;
+  submission_readiness_score?: number | null;
+  cta_status?: string | null;
+}
+
+export type DualViewAdviceExecutionMode =
+  (typeof DualViewAdviceExecutionMode)[keyof typeof DualViewAdviceExecutionMode];
+
+export const DualViewAdviceExecutionMode = {
+  live_openai: "live_openai",
+  deterministic_mock: "deterministic_mock",
+  fallback_mock: "fallback_mock",
+} as const;
+
+export interface DualViewAdvice {
+  dossierId: string;
+  runId?: string | null;
+  provider: string;
+  executionMode: DualViewAdviceExecutionMode;
+  model?: string | null;
+  generatedAt?: string | null;
+  durationMs?: number | null;
+  fallbackReason?: string | null;
+  partnerView: DualViewAdvicePartnerView;
+  entrepreneurSummary?: DualViewAdviceEntrepreneurSummary | null;
+  partial: boolean;
+  warnings: string[];
+}
+
 export interface MemorandumSection {
   title: string;
   body: string;
@@ -478,6 +547,10 @@ export const ListDossiersBucket = {
 
 export type DownloadDocument404 = {
   error?: string;
+};
+
+export type GetDualViewAdvice404 = {
+  error: string;
 };
 
 export type ListRecentActivityParams = {
