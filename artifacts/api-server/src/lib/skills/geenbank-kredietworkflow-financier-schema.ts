@@ -398,24 +398,146 @@ function normalizeRiskAnalysisSummary(parsed: { riskAnalysis?: unknown }): void 
 }
 
 /**
+ * Optional deterministic context the orchestrator can hand to
+ * `normalizeKredietworkflowFinancierPayload`. Used **only** as a
+ * conservative backfill source — never to override valid
+ * model-supplied values.
+ */
+export type KredietworkflowNormalizationContext = {
+  /**
+   * Deterministic DSCR proxy already computed by the orchestrator
+   * from `profit` and the requested-amount debt-service estimate
+   * (`callOpenAISkill` derivedFinancials block). Used to backfill
+   * `riskAnalysis.metrics.dscr` ONLY when the live model omitted it
+   * or returned an unparseable value. Must be a finite number;
+   * non-finite values are ignored.
+   */
+  deterministicDscr?: number;
+};
+
+/**
+ * Parse a single risk-metric value into a finite number or `null`.
+ *
+ * Accepts:
+ * - finite `number` → returned as-is,
+ * - `null` / `undefined` → `null`,
+ * - single percentage / decimal string (`"1.45"`, `"1,45"`,
+ *   `"38%"`, `"0,38"`, `"38 %"`) → numeric value with `%` and
+ *   whitespace stripped, comma converted to dot. **No scale
+ *   conversion is performed** — `"38%"` parses to `38`, not `0.38`.
+ *   Callers that need fractional solvency (`0.38`) must already
+ *   pass it that way; we refuse to guess scale because that risk
+ *   inverting interpretation.
+ *
+ * Anything else (range strings like `"30-40%"`, qualitative text,
+ * NaN, booleans, arrays, objects) → `null`.
+ *
+ * Never throws. Never produces `NaN`.
+ */
+function parseMetricNumber(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (value === null || value === undefined) return null;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (trimmed === "") return null;
+    // Same single-percentage / decimal pattern as the rate
+    // normalizer — range strings (`"8-10%"`) intentionally do NOT
+    // match because their inner hyphen breaks the regex.
+    const single = /^[+-]?\d+(?:[.,]\d+)?\s*%?$/.test(trimmed);
+    if (!single) return null;
+    const num = Number(trimmed.replace(/[%\s]/g, "").replace(",", "."));
+    return Number.isFinite(num) ? num : null;
+  }
+  return null;
+}
+
+/**
+ * Normalize `riskAnalysis.metrics` on a raw kredietworkflow payload.
+ *
+ * Behaviour (deliberately conservative — we never invent metrics):
+ * - If `riskAnalysis` is missing / not an object → no-op (validator
+ *   will reject the parent shape; not our job to invent it).
+ * - Otherwise we ALWAYS produce a `metrics` object with exactly four
+ *   keys (`dscr`, `solvency`, `ltv`, `netWorkingCapital`) so the
+ *   validator's `isObject(value.metrics)` + dscr/solvency-required
+ *   checks always pass on shape:
+ *   - For each metric we accept `number | null | percentage-string`
+ *     via `parseMetricNumber`. Anything we cannot parse safely → `null`.
+ *   - **`dscr` only** is backfilled from `ctx.deterministicDscr` when
+ *     the model gave nothing parseable AND the deterministic value
+ *     is finite. A valid model-supplied `dscr` is **NEVER** overridden.
+ *   - `solvency`, `ltv`, `netWorkingCapital` are **never fabricated**
+ *     — if the model did not supply them they stay `null`. That keeps
+ *     loan-officer review honest about which numbers came from the
+ *     model and which from deterministic computation.
+ *
+ * Only mutates `riskAnalysis.metrics`; every other risk field
+ * (`summary`, `keyRisks`, `mitigants`, `assumptions`, `stressCase`)
+ * is left untouched so the validator still enforces shape on them.
+ */
+function normalizeRiskAnalysisMetrics(
+  parsed: { riskAnalysis?: unknown },
+  ctx: KredietworkflowNormalizationContext,
+): void {
+  const ra = parsed.riskAnalysis;
+  if (!isObject(ra)) return;
+
+  const rawMetrics = isObject(ra.metrics)
+    ? (ra.metrics as Record<string, unknown>)
+    : {};
+
+  let dscr = parseMetricNumber(rawMetrics.dscr);
+  const solvency = parseMetricNumber(rawMetrics.solvency);
+  const ltv = parseMetricNumber(rawMetrics.ltv);
+  const netWorkingCapital = parseMetricNumber(rawMetrics.netWorkingCapital);
+
+  // Deterministic DSCR backfill — only when model gave nothing
+  // usable. We refuse to fabricate solvency/ltv/netWorkingCapital
+  // because the orchestrator does not have authoritative balance-sheet
+  // / collateral data on hand for them.
+  if (
+    dscr === null &&
+    typeof ctx.deterministicDscr === "number" &&
+    Number.isFinite(ctx.deterministicDscr)
+  ) {
+    dscr = ctx.deterministicDscr;
+  }
+
+  ra.metrics = { dscr, solvency, ltv, netWorkingCapital };
+}
+
+/**
  * Normalize the `rate` field on every facility-structure node inside a
  * raw `geenbank-kredietworkflow` financier-shape JSON payload, before
  * validation. Also normalizes `riskAnalysis.summary` when supporting
- * evidence is present (see `normalizeRiskAnalysisSummary`). Operates
- * in place on the parsed object and is safe to call on any unknown
- * value (no-op for non-objects). Touches:
+ * evidence is present (`normalizeRiskAnalysisSummary`) and
+ * `riskAnalysis.metrics` so the required shape is always present
+ * (`normalizeRiskAnalysisMetrics` — backfills `dscr` from the
+ * deterministic proxy when the model omits it; never fabricates
+ * `solvency`/`ltv`/`netWorkingCapital`). Operates in place on the
+ * parsed object and is safe to call on any unknown value (no-op for
+ * non-objects). Touches:
  *   - `requestedStructure`
  *   - `recommendedStructure`
  *   - `commercialProposal.structure`
  *   - `termSheet.structure`
  *   - `riskAnalysis.summary` (only when missing/empty AND evidence exists)
+ *   - `riskAnalysis.metrics` (always normalized to the 4-key shape
+ *     when `riskAnalysis` is an object)
  *
  * Does NOT touch any other field — the validator still rejects
  * genuinely malformed payloads (bad enum, missing arrays, etc.) and
  * the live adapter still falls back to the deterministic mock with a
  * structured `fallbackReason`.
+ *
+ * The optional `ctx` argument is backwards-compatible — every existing
+ * call site that does not pass it still gets the previous behaviour
+ * (no DSCR backfill).
  */
-export function normalizeKredietworkflowFinancierPayload(parsed: unknown): unknown {
+export function normalizeKredietworkflowFinancierPayload(
+  parsed: unknown,
+  ctx: KredietworkflowNormalizationContext = {},
+): unknown {
   if (!isObject(parsed)) return parsed;
   normalizeStructureRate(parsed.requestedStructure);
   normalizeStructureRate(parsed.recommendedStructure);
@@ -426,6 +548,7 @@ export function normalizeKredietworkflowFinancierPayload(parsed: unknown): unkno
     normalizeStructureRate(parsed.termSheet.structure);
   }
   normalizeRiskAnalysisSummary(parsed);
+  normalizeRiskAnalysisMetrics(parsed, ctx);
   return parsed;
 }
 

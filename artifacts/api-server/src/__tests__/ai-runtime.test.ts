@@ -2310,6 +2310,246 @@ test("kredietworkflow adapter: live OpenAI never leaks OPENAI_API_KEY in the sum
   }
 });
 
+// --- riskAnalysis.metrics normalization (live OpenAI shape) -------------
+//
+// These tests exercise the pure riskAnalysis-metrics normalizer used
+// by the live kredietworkflow adapter BEFORE schema validation. They
+// never call real OpenAI. They guard against:
+//   1. valid metrics object passes through unchanged,
+//   2. missing metrics object is created with deterministic dscr
+//      backfill and explicit nulls for unknown solvency/ltv/nwc
+//      (NEVER fabricated),
+//   3. percentage / Dutch-comma strings normalize safely,
+//   4. unparseable values become null, never NaN,
+//   5. valid model-supplied dscr is NEVER overridden by deterministic,
+//   6. unrelated invalid fields still fail validation,
+//   7. rate + summary normalization still work alongside metrics
+//      normalization,
+//   8. live adapter accepts payloads with missing metrics (falls
+//      through normalizer + validator without falling back to mock)
+//      AND still falls back when other fields are truly invalid.
+
+test("normalizeKredietworkflowFinancierPayload: valid metrics object passes through unchanged", () => {
+  const sample = buildFinancierSample();
+  const before = { ...sample.riskAnalysis.metrics };
+  normalizeKredietworkflowFinancierPayload(sample, { deterministicDscr: 4.17 });
+  // Model-supplied values win.
+  assert.equal(sample.riskAnalysis.metrics.dscr, before.dscr);
+  assert.equal(sample.riskAnalysis.metrics.solvency, before.solvency);
+  assert.equal(sample.riskAnalysis.metrics.ltv, before.ltv);
+  assert.equal(sample.riskAnalysis.metrics.netWorkingCapital, before.netWorkingCapital);
+  assert.equal(validateGeenbankKredietworkflowFinancierJson(sample), null);
+});
+
+test("normalizeKredietworkflowFinancierPayload: missing metrics object is created with deterministic dscr backfill and null unknowns", () => {
+  const sample = buildFinancierSample();
+  delete (sample.riskAnalysis as { metrics?: unknown }).metrics;
+  normalizeKredietworkflowFinancierPayload(sample, { deterministicDscr: 4.17 });
+  const m = sample.riskAnalysis.metrics;
+  assert.equal(m.dscr, 4.17, "dscr backfilled from deterministic proxy");
+  assert.equal(m.solvency, null, "solvency must NOT be fabricated");
+  assert.equal(m.ltv, null, "ltv must NOT be fabricated");
+  assert.equal(m.netWorkingCapital, null, "netWorkingCapital must NOT be fabricated");
+  assert.equal(validateGeenbankKredietworkflowFinancierJson(sample), null);
+});
+
+test("normalizeKredietworkflowFinancierPayload: missing metrics WITHOUT deterministic ctx → all null, validator still passes shape", () => {
+  const sample = buildFinancierSample();
+  delete (sample.riskAnalysis as { metrics?: unknown }).metrics;
+  normalizeKredietworkflowFinancierPayload(sample);
+  assert.deepEqual(sample.riskAnalysis.metrics, {
+    dscr: null,
+    solvency: null,
+    ltv: null,
+    netWorkingCapital: null,
+  });
+  // Validator allows null for both required dscr + solvency.
+  assert.equal(validateGeenbankKredietworkflowFinancierJson(sample), null);
+});
+
+test("normalizeKredietworkflowFinancierPayload: percentage strings normalize safely (no scale conversion)", () => {
+  const sample = buildFinancierSample();
+  sample.riskAnalysis.metrics = {
+    dscr: "1,45" as unknown as number,
+    solvency: "38%" as unknown as number,
+    ltv: "0.65" as unknown as number,
+    netWorkingCapital: "80000" as unknown as number,
+  };
+  normalizeKredietworkflowFinancierPayload(sample, { deterministicDscr: 4.17 });
+  const m = sample.riskAnalysis.metrics;
+  assert.equal(m.dscr, 1.45);
+  // No scale conversion — "38%" → 38, not 0.38. Documented behaviour.
+  assert.equal(m.solvency, 38);
+  assert.equal(m.ltv, 0.65);
+  assert.equal(m.netWorkingCapital, 80000);
+  assert.equal(validateGeenbankKredietworkflowFinancierJson(sample), null);
+});
+
+test("normalizeKredietworkflowFinancierPayload: unparseable metric values become null, never NaN", () => {
+  const sample = buildFinancierSample();
+  sample.riskAnalysis.metrics = {
+    dscr: "n.v.t." as unknown as number,
+    solvency: "30-40%" as unknown as number,
+    ltv: Number.NaN as unknown as number,
+    netWorkingCapital: { value: 80000 } as unknown as number,
+  };
+  normalizeKredietworkflowFinancierPayload(sample, { deterministicDscr: 4.17 });
+  const m = sample.riskAnalysis.metrics;
+  // dscr unparseable → backfilled from deterministic.
+  assert.equal(m.dscr, 4.17);
+  assert.equal(m.solvency, null, "range string must coerce to null");
+  assert.equal(m.ltv, null, "NaN must coerce to null");
+  assert.equal(m.netWorkingCapital, null, "object must coerce to null");
+  // No NaN anywhere.
+  for (const key of ["dscr", "solvency", "ltv", "netWorkingCapital"] as const) {
+    const v = m[key];
+    assert.ok(v === null || (typeof v === "number" && Number.isFinite(v)),
+      `metrics.${key} must be finite number or null, got ${v}`);
+  }
+  assert.equal(validateGeenbankKredietworkflowFinancierJson(sample), null);
+});
+
+test("normalizeKredietworkflowFinancierPayload: valid model dscr is NEVER overridden by deterministic backfill", () => {
+  const sample = buildFinancierSample();
+  sample.riskAnalysis.metrics = { dscr: 1.45, solvency: 0.38, ltv: null, netWorkingCapital: null };
+  normalizeKredietworkflowFinancierPayload(sample, { deterministicDscr: 99.9 });
+  assert.equal(sample.riskAnalysis.metrics.dscr, 1.45, "model dscr must win over deterministic");
+});
+
+test("normalizeKredietworkflowFinancierPayload: metrics is null → replaced with explicit-nulls object (validator passes shape)", () => {
+  const sample = buildFinancierSample();
+  (sample.riskAnalysis as unknown as { metrics: unknown }).metrics = null;
+  normalizeKredietworkflowFinancierPayload(sample, { deterministicDscr: 4.17 });
+  assert.deepEqual(sample.riskAnalysis.metrics, {
+    dscr: 4.17,
+    solvency: null,
+    ltv: null,
+    netWorkingCapital: null,
+  });
+  assert.equal(validateGeenbankKredietworkflowFinancierJson(sample), null);
+});
+
+test("normalizeKredietworkflowFinancierPayload: non-finite deterministicDscr (NaN/Infinity) is ignored — dscr stays null", () => {
+  const sample = buildFinancierSample();
+  delete (sample.riskAnalysis as { metrics?: unknown }).metrics;
+  normalizeKredietworkflowFinancierPayload(sample, { deterministicDscr: Number.NaN });
+  assert.equal(sample.riskAnalysis.metrics.dscr, null);
+  delete (sample.riskAnalysis as { metrics?: unknown }).metrics;
+  normalizeKredietworkflowFinancierPayload(sample, { deterministicDscr: Number.POSITIVE_INFINITY });
+  assert.equal(sample.riskAnalysis.metrics.dscr, null);
+});
+
+test("normalizeKredietworkflowFinancierPayload: rate + summary + metrics normalization all work in same payload", () => {
+  const sample = buildFinancierSample();
+  // Exercise every normalizer at once.
+  (sample.requestedStructure as unknown as { rate: unknown }).rate = "8.5%";
+  (sample.recommendedStructure as unknown as { rate: unknown }).rate = "marktconform";
+  (sample.riskAnalysis as unknown as { summary: unknown }).summary = "";
+  delete (sample.riskAnalysis as { metrics?: unknown }).metrics;
+  normalizeKredietworkflowFinancierPayload(sample, { deterministicDscr: 4.17 });
+  // Rate.
+  assert.equal(sample.requestedStructure.rate, 8.5);
+  assert.equal(sample.recommendedStructure.rate, null);
+  assert.equal(sample.recommendedStructure.rateComment, "marktconform");
+  // Summary.
+  assert.match(sample.riskAnalysis.summary, /Belangrijkste risico's:/);
+  // Metrics.
+  assert.equal(sample.riskAnalysis.metrics.dscr, 4.17);
+  assert.equal(sample.riskAnalysis.metrics.solvency, null);
+  assert.equal(validateGeenbankKredietworkflowFinancierJson(sample), null);
+});
+
+test("normalizeKredietworkflowFinancierPayload: unrelated invalid fields still fail validation after metrics normalization", () => {
+  const sample = buildFinancierSample();
+  delete (sample.riskAnalysis as { metrics?: unknown }).metrics;
+  // Deliberately corrupt an unrelated required field.
+  (sample as unknown as { decision: unknown }).decision = "approved";
+  normalizeKredietworkflowFinancierPayload(sample, { deterministicDscr: 4.17 });
+  // Metrics was normalized…
+  assert.deepEqual(sample.riskAnalysis.metrics, {
+    dscr: 4.17, solvency: null, ltv: null, netWorkingCapital: null,
+  });
+  // …but the unrelated bad field still fails validation.
+  const problem = validateGeenbankKredietworkflowFinancierJson(sample);
+  assert.ok(problem && /decision/i.test(problem));
+});
+
+test("kredietworkflow adapter: live OpenAI omitting riskAnalysis.metrics is normalized + accepted (no fallback)", async () => {
+  const { dossierId } = await createDossier();
+  const [dossier] = await db
+    .select()
+    .from(dossiersTable)
+    .where(inArray(dossiersTable.id, [dossierId]));
+  const liveResponse = buildFinancierSample();
+  // Reproduce production failure: live model returns no metrics object.
+  delete (liveResponse.riskAnalysis as { metrics?: unknown }).metrics;
+  setOpenAIChatClientForTesting(
+    makeFakeOpenAI(() => ({
+      content: JSON.stringify(liveResponse),
+      model: "gpt-4o-mini",
+    })),
+  );
+  try {
+    await withKwEnv(
+      { [KW_PROVIDER_ENV]: "openai", OPENAI_API_KEY: "sk-test-fake-1234567890" },
+      async () => {
+        const r = await GeenbankKredietworkflowAdapter.run(buildKwArgs(dossier));
+        assert.equal(r.ok, true, `expected live success, got fallbackReason=${r.invocation.fallbackReason}`);
+        assert.equal(r.usedMockMode, false);
+        assert.equal(r.invocation.fallbackReason, null);
+        const extras = r.invocation.extras as
+          | { canonical?: GeenbankKredietworkflowFinancierOutput }
+          | null;
+        assert.ok(extras?.canonical, "extras.canonical must be populated on live success");
+        const m = extras!.canonical!.riskAnalysis.metrics;
+        // dscr backfilled from deterministic (buildKwArgs default = 4.17).
+        assert.equal(m.dscr, 4.17);
+        assert.equal(m.solvency, null);
+        assert.equal(m.ltv, null);
+        assert.equal(m.netWorkingCapital, null);
+      },
+    );
+  } finally {
+    setOpenAIChatClientForTesting(null);
+  }
+});
+
+test("kredietworkflow adapter: live OpenAI with truly invalid riskAnalysis (missing keyRisks array) still falls back to mock cleanly", async () => {
+  const { dossierId } = await createDossier();
+  const [dossier] = await db
+    .select()
+    .from(dossiersTable)
+    .where(inArray(dossiersTable.id, [dossierId]));
+  const liveResponse = buildFinancierSample();
+  delete (liveResponse.riskAnalysis as { metrics?: unknown }).metrics;
+  // Corrupt an unrelated risk field that the metrics normalizer
+  // does NOT touch — adapter must still fall back cleanly.
+  (liveResponse.riskAnalysis as unknown as { keyRisks: unknown }).keyRisks = "not an array";
+  setOpenAIChatClientForTesting(
+    makeFakeOpenAI(() => ({
+      content: JSON.stringify(liveResponse),
+      model: "gpt-4o-mini",
+    })),
+  );
+  try {
+    await withKwEnv(
+      { [KW_PROVIDER_ENV]: "openai", OPENAI_API_KEY: "sk-test-fake-1234567890" },
+      async () => {
+        const r = await GeenbankKredietworkflowAdapter.run(buildKwArgs(dossier));
+        assert.equal(r.usedMockMode, true);
+        assert.equal(r.invocation.provider, "openai");
+        assert.ok(
+          r.invocation.fallbackReason &&
+            /keyRisks/i.test(r.invocation.fallbackReason),
+          `unexpected fallbackReason: ${r.invocation.fallbackReason}`,
+        );
+      },
+    );
+  } finally {
+    setOpenAIChatClientForTesting(null);
+  }
+});
+
 test("validateGeenbankKredietworkflowFinancierJson rejects rateComment of wrong type", () => {
   const sample = buildFinancierSample();
   (sample.requestedStructure as unknown as { rateComment: unknown }).rateComment =

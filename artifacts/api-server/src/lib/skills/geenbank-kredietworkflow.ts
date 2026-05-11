@@ -320,11 +320,16 @@ async function callOpenAISkill(
     const msg = err instanceof Error ? err.message : String(err);
     throw new Error(`OpenAI antwoord was geen geldige JSON: ${msg}`);
   }
-  // Normalize common LLM pricing-rate shapes BEFORE validation.
-  // Maps "8.5%" / "8,5%" → numeric, range / "marktconform" /
-  // "nader te bepalen" → rate=null + rateComment. Never produces NaN.
-  // Schema validation still rejects every other malformed field.
-  parsed = normalizeKredietworkflowFinancierPayload(parsed);
+  // Normalize common LLM pricing-rate shapes, riskAnalysis.summary,
+  // and riskAnalysis.metrics BEFORE validation. Pass the deterministic
+  // DSCR proxy so the metrics normalizer can backfill `dscr` when the
+  // model omits it (it never overrides a valid model-supplied value
+  // and never fabricates solvency / ltv / netWorkingCapital). Never
+  // produces NaN. Schema validation still rejects every other
+  // malformed field.
+  parsed = normalizeKredietworkflowFinancierPayload(parsed, {
+    deterministicDscr: args.dscr,
+  });
   const problem = validateGeenbankKredietworkflowFinancierJson(parsed);
   if (problem) throw new Error(`Skill-antwoord ongeldig: ${problem}`);
 

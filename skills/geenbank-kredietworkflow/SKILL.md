@@ -489,6 +489,66 @@ never produces a generic "no risks found" sentence on its own.
 or on `GATE_THRESHOLDS` — those remain driven exclusively by
 completeness / correctness / viability scores and the central gate.
 
+#### Risk-analysis metrics (required object, never omit)
+
+The `riskAnalysis.metrics` block carries the quantitative credit
+ratios that loan officers and the entrepreneur view both depend on.
+Every live response MUST satisfy the following contract:
+
+* **`riskAnalysis.metrics: { dscr, solvency, ltv, netWorkingCapital }`**
+  — **REQUIRED object, MUST always be present**. The four keys are
+  the canonical set; do not invent extra keys.
+* **`metrics.dscr: number | null`** — Debt-Service-Coverage Ratio.
+  Include the value when it is **known or directly derivable from
+  the supplied input** (`derivedFinancials.dscr` is provided in the
+  user payload). Otherwise emit `null`.
+* **`metrics.solvency: number | null`** — equity / total assets.
+  Include the value **only when supported by balance-sheet data** in
+  the input (jaarrekening, intake). Otherwise emit `null`. **Do NOT
+  fabricate** a solvency ratio when no balance-sheet data is
+  available.
+* **`metrics.ltv: number | null`** — Loan-To-Value. Include the value
+  **only when collateral / asset valuation data is available** in the
+  input. Otherwise emit `null`. **Do NOT fabricate** an LTV.
+* **`metrics.netWorkingCapital: number | null`** — current assets –
+  current liabilities (in EUR). Include the value **only when current
+  assets and current liabilities are both available** in the input.
+  Otherwise emit `null`. **Do NOT fabricate** working capital.
+
+Hard rules:
+
+* `metrics` MUST be an object literal — never `null`, never omitted.
+* Every metric value MUST be a finite `number` or `null` — never
+  `NaN`, never a string, never a range like `"30-40%"`, never
+  qualitative text like `"sterk"`.
+* Use `null` for unknown / unsupported metrics. Loan officers prefer
+  an explicit "unknown" over an invented number.
+
+The live adapter normalizes `riskAnalysis.metrics` defensively
+(`normalizeRiskAnalysisMetrics` in
+`geenbank-kredietworkflow-financier-schema.ts`), **before** schema
+validation, with strict guardrails:
+
+| Live `metrics.<field>` | Normalized result |
+| --- | --- |
+| finite `number` | unchanged (model value wins) |
+| `null` | `null` |
+| missing key | `null` (or for `dscr`: deterministic proxy from `derivedFinancials.dscr` when finite) |
+| `"1.45"`, `"1,45"`, `"38%"`, `"0,38"`, `"38 %"` | numeric value with `%` and whitespace stripped, comma → dot. **No scale conversion** — `"38%"` parses to `38`, not `0.38`. |
+| range string (`"30-40%"`), qualitative text, `NaN`, boolean, array, object | `null` |
+| missing entire `metrics` object | replaced with `{ dscr, solvency: null, ltv: null, netWorkingCapital: null }` (with `dscr` backfilled from the deterministic proxy when finite, else `null`) |
+
+The normalizer **never invents `solvency`, `ltv`, or
+`netWorkingCapital`** — those stay `null` whenever the model did not
+provide a parseable value, because the orchestrator does not have
+authoritative balance-sheet / collateral data on hand. Only `dscr` is
+backfilled from the deterministic proxy already computed by the
+orchestrator. A valid model-supplied `dscr` is **never** overridden.
+
+`riskAnalysis.metrics` has no effect on `entrepreneurReport.canSubmit`
+or on `GATE_THRESHOLDS` — those remain driven exclusively by
+completeness / correctness / viability scores and the central gate.
+
 ### Canonical credit-analysis framing (landed)
 
 This skill is now treated as the **canonical credit-analysis engine**
