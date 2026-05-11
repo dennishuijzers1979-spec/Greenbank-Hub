@@ -1,0 +1,181 @@
+Preserve baseline behavior from commit 5f9eee2d3869bd627f6d6e9fbc3b5298b33c40a7.
+
+Do not regress:
+- gate tests
+- typed 409 payloads
+- upload gating
+- AI analysis gating
+- submit gating
+- officer visibility
+- RBAC
+- document download permissions
+- Dutch UI language
+- server-side-only skill invocation
+- mock fallback behavior
+- AI skill invocation observability
+- honest execution labels
+- live OpenAI FinancingProductAdvisorDualView behavior
+- internal Financier productadvies card
+- login redirect fix
+- GeenbankKredietworkflow financier-shape schema and mapper
+- central gate remains binding
+
+Task: Enable a controlled OpenAI live pilot for GeenbankKredietworkflow.
+
+Context:
+GeenbankKredietworkflow is now modeled as the canonical credit-analysis skill.
+
+It should:
+- ingest the dossier/document/financial context
+- produce financier/credit-analysis output
+- validate against GeenbankKredietworkflowFinancierOutput
+- map to current app-compatible fields via mapKredietworkflowFinancierOutputToAppAnalysis()
+- preserve the canonical financier output for audit/downstream skills
+- fall back to the existing deterministic mock on any failure
+
+Do not change gate thresholds.
+Do not let LLM output directly override the central gate.
+The central gate remains binding.
+
+1. Runtime opt-in
+
+Enable live execution only when:
+
+AI_SKILL_GEENBANKKREDIETWORKFLOW_PROVIDER=openai
+OPENAI_API_KEY is present
+
+Optional:
+OPENAI_MODEL or AI_SKILL_GEENBANKKREDIETWORKFLOW_MODEL
+
+Do not use global OPENAI_API_KEY alone to make this skill live.
+Do not enable any other skill.
+Do not require Assistant ID.
+Do not call a ChatGPT UI URL.
+
+2. Load skill instructions
+
+In:
+
+artifacts/api-server/src/lib/skills/geenbank-kredietworkflow.ts
+
+When provider=openai:
+- load skills/geenbank-kredietworkflow/SKILL.md
+- use it as the system/developer instruction for the OpenAI request
+- send structured dossier/pipeline input
+- include available document status, scores, extracted financials/mock extracted financials, current conditions, and relevant dossier fields
+- request JSON output only
+- use temperature 0 or lowest deterministic setting available
+
+3. Validate live output
+
+Parse the OpenAI response as JSON and validate it with:
+
+validateGeenbankKredietworkflowFinancierJson()
+
+If validation fails:
+- record fallbackReason
+- fall back to deterministic mock
+- do not crash the AI pipeline
+
+4. Map validated output to app-compatible fields
+
+On successful validation:
+- map with mapKredietworkflowFinancierOutputToAppAnalysis()
+- use the mapped app fields for the existing adapter output:
+  - verdict
+  - verdictSummary
+  - confidenceScore
+  - strongPoints
+  - weakPoints
+  - entrepreneurReport
+
+Preserve mapped.canonical in SkillInvocation.extras for:
+- auditability
+- loan officer review
+- future dual-view enrichment
+- future moneycare memorandum generation
+
+5. Keep central gate binding
+
+After mapping:
+- do not allow mapped entrepreneurReport.canSubmit to bypass existing gate thresholds
+- if current scores are below GATE_THRESHOLDS, canSubmit must not become true
+- preserve current checkRunAnalysisGate behavior
+
+6. Populate pipeline context for downstream use
+
+If the live kredietworkflow succeeds:
+- populate PipelineContext.creditWorkflowEnrichment from mapped canonical output where the architecture allows it
+- make it available to FinancingProductAdvisorDualView as enrichment later if this can be done safely
+- if current orchestration does not yet support this cleanly, store it in SkillInvocation.extras and document the handoff as next step
+
+Do not break the existing dual-view live OpenAI path.
+
+7. Observability
+
+AI uitvoeringsdetails should show for GeenbankKredietworkflow:
+- Live OpenAI when live succeeds
+- Fallback naar mock if OpenAI was attempted but failed
+- Deterministisch / mock when env var is absent
+- model
+- durationMs
+- fallbackReason
+- output summary
+- canonical output availability
+
+Other mock adapters must remain clearly mock/deterministic.
+
+8. Tests
+
+Add tests with injected/mock OpenAI client:
+- env absent → deterministic/mock
+- provider=openai but no OPENAI_API_KEY → fallback/mock with reason
+- valid OpenAI financier output validates and maps to app fields
+- invalid JSON falls back to mock
+- invalid schema falls back to mock
+- No Go maps to uitdagend and canSubmit false
+- Conditional Go maps to voorwaardelijk
+- Go maps to kansrijk but still respects gate thresholds
+- canonical output is preserved in extras
+- no API keys/secrets leak in invocation metadata
+- FinancingProductAdvisorDualView remains live-capable and unchanged
+- other adapters remain mock unless explicitly configured
+
+Do not call real OpenAI in tests.
+
+9. README/docs update
+
+Update docs to explain:
+- GeenbankKredietworkflow is now live-capable but env-gated
+- required env vars
+- fallback behavior
+- canonical output preservation
+- central gate remains binding
+- how this improves future dual-view and memorandum context
+
+10. Run checks
+
+Run:
+node scripts/check-skill-packs.mjs
+pnpm --filter @workspace/api-server run test
+pnpm run typecheck
+pnpm run build
+
+11. Commit and push
+
+Commit with:
+
+Geenbank Hub: enable OpenAI pilot for kredietworkflow
+
+12. Report back
+
+Report:
+- changed files
+- test/typecheck/build output
+- whether real OpenAI was called or only mocked in tests
+- required env vars
+- how fallback behaves
+- how canonical output is preserved
+- how central gate remains binding
+- what remains mocked
+- exact next runtime verification step

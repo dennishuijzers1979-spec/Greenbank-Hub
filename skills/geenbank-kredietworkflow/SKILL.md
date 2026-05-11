@@ -274,14 +274,18 @@ Before finalizing, verify all of the following:
 
 ---
 
-## Repo integration notes (forward-only — adapter still on mock)
+## Repo integration notes (live-capable, env-gated)
 
 These notes document how this skill pack maps onto the Geenbank Hub
-adapter today. Importing this pack does **not** enable live OpenAI
-invocation. The deterministic mock in
+adapter. The adapter is **live-capable** behind a per-skill opt-in
+(`AI_SKILL_GEENBANKKREDIETWORKFLOW_PROVIDER=openai` plus
+`OPENAI_API_KEY`); see *Live OpenAI pilot (env-gated, landed)* further
+down. Without the opt-in env, the deterministic mock in
 `artifacts/api-server/src/lib/skills/geenbank-kredietworkflow.ts`
-remains the source of `GeenbankKredietworkflowOutput` for the dossier
-gate and for the *AI uitvoeringsdetails* panel.
+remains the source of `GeenbankKredietworkflowOutput`. In **both**
+modes the central gate (`GATE_THRESHOLDS`) is the binding source of
+truth for `canSubmit`, and the *AI uitvoeringsdetails* panel reflects
+the actual provider/model/fallback state.
 
 ### Adapter binding
 
@@ -350,6 +354,53 @@ adapter* rule.
 | `borrower` / `requested_structure` | (echo from dossier) | Pass-through. Do not let the live skill rewrite borrower identity. |
 | `risk analysis memo` / `indicative term sheet` / `executive summary .docx` | (not consumed today) | Persist as separate `extras` artifacts; do not break the `SkillResult<T>` shape. |
 
+### Live OpenAI pilot (env-gated, landed)
+
+This skill is now **live-capable** behind a per-skill opt-in. Live
+execution only kicks in when **both**:
+
+* `AI_SKILL_GEENBANKKREDIETWORKFLOW_PROVIDER=openai`
+* `OPENAI_API_KEY` is present
+
+Optional: `AI_SKILL_GEENBANKKREDIETWORKFLOW_MODEL` or `OPENAI_MODEL`
+(defaults to `gpt-4o-mini`). Setting only `OPENAI_API_KEY` does **not**
+auto-promote this skill — the honesty rule in `runtime.ts` keeps every
+adapter on mock unless its per-skill PROVIDER env explicitly opts in.
+
+The adapter (`artifacts/api-server/src/lib/skills/geenbank-kredietworkflow.ts`):
+
+1. loads this `SKILL.md` as the system prompt;
+2. sends a structured dossier payload (borrower, request, scores +
+   `GATE_THRESHOLDS`, derived financials, evidence/document statuses)
+   as the user message at `temperature=0`, `response_format=json_object`;
+3. parses + validates the response with
+   `validateGeenbankKredietworkflowFinancierJson()`;
+4. on success: maps via `mapKredietworkflowFinancierOutputToAppAnalysis()`
+   and persists `mapped.canonical` in `SkillInvocation.extras` (under
+   `extras.canonical`) for loan-officer review, future dual-view
+   enrichment, and future moneycare memorandum generation;
+5. on **any** failure (invalid JSON, schema rejection, OpenAI error):
+   records `fallbackReason`, falls back to the deterministic mock, and
+   logs a structured warn line. The AI pipeline never crashes.
+
+**Central gate stays binding.** After mapping, `entrepreneurReport.canSubmit`
+is ANDed with the central gate (`completeness/correctness/viability >=
+GATE_THRESHOLDS.*`). The LLM cannot promote `canSubmit` past the gate;
+the orchestrator-level `checkRunAnalysisGate` remains the single source
+of truth at submit time. The decision applied is recorded in
+`extras.gateApplied` (`canSubmitFromMapper` vs `canSubmitAfterGate`).
+
+The *AI uitvoeringsdetails* panel reflects this honestly:
+* `Live OpenAI` when the live skill succeeded (provider=openai, no
+  fallbackReason, model = real model name);
+* `Fallback naar mock` when OpenAI was attempted but failed
+  (provider=openai, fallbackReason populated, model=null);
+* `Deterministisch / mock` when the env var is absent (provider=mock).
+
+`OPENAI_API_KEY` itself is never persisted, never logged, and is
+scrubbed defensively from `extras` / `inputSummary` / `outputSummary` /
+`errorMessage` by `runtime.scrubSecrets`.
+
 ### Canonical credit-analysis framing (landed)
 
 This skill is now treated as the **canonical credit-analysis engine**
@@ -405,14 +456,19 @@ artefacts ship alongside this SKILL.md:
   `artifacts/api-server/src/lib/skills/types.ts` now carries an
   optional `creditWorkflowEnrichment: PipelineCreditWorkflowEnrichment | null`
   slot — the chain hand-off documented under the *Mismatch* section
-  above. Today it is `null` (adapter still on mock); the live wiring
-  populates it from the canonical output.
+  above. Today it is still `null` from the orchestrator step (the
+  adapter persists the canonical output on `SkillInvocation.extras`
+  instead); the next-step pipeline wiring will populate this slot from
+  the canonical output so chained skills can consume it without
+  re-parsing.
 
-These are schema + mapper + types + tests + docs only. The adapter
-(`geenbank-kredietworkflow.ts`) still runs the deterministic mock,
-the central gate (`GATE_THRESHOLDS`) still drives `canSubmit`,
-`validateGeenbankKredietworkflowJson` still validates the mock
-output, and no live OpenAI call is enabled.
+The schema + mapper + types + tests + docs are forward-only and the
+entrepreneur-facing validator (`validateGeenbankKredietworkflowJson`)
+still validates the mock-shape output. The adapter itself is now
+**live-capable** when its per-skill env opt-in is present (see *Live
+OpenAI pilot* above). Without the opt-in it runs the deterministic
+mock; in either mode the central gate (`GATE_THRESHOLDS`) drives the
+final `canSubmit`.
 
 ### Forward-only steps to wire live invocation (NOT executed today)
 
