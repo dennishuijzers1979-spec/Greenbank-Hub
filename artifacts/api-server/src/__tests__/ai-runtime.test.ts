@@ -3305,6 +3305,34 @@ test("normalizeKredietworkflowFinancierPayload: unrecognised body shape (number)
   );
 });
 
+test("normalizeKredietworkflowFinancierPayload: mixed-type body array (e.g. [42, 'ok']) is rejected, not silently coerced", () => {
+  const sample = buildFinancierSample();
+  (sample.creditReport.sections[0] as unknown as { body: unknown }).body = [42, "ok"];
+  normalizeKredietworkflowFinancierPayload(sample);
+  // Must NOT become "ok" — that would mask the schema error.
+  assert.notEqual(sample.creditReport.sections[0].body, "ok");
+  assert.equal(Array.isArray(sample.creditReport.sections[0].body), true);
+  const problem = validateGeenbankKredietworkflowFinancierJson(sample);
+  assert.ok(
+    problem && /sections.*body/i.test(problem),
+    `expected sections[*].body validator error, got ${problem}`,
+  );
+});
+
+test("normalizeKredietworkflowFinancierPayload: object body whose recognised text key is itself an object is rejected (no recursion / no invention)", () => {
+  const sample = buildFinancierSample();
+  (sample.creditReport.sections[0] as unknown as { body: unknown }).body = {
+    text: { content: "verstopt" },
+  };
+  normalizeKredietworkflowFinancierPayload(sample);
+  assert.equal(typeof sample.creditReport.sections[0].body, "object");
+  const problem = validateGeenbankKredietworkflowFinancierJson(sample);
+  assert.ok(
+    problem && /sections.*body/i.test(problem),
+    `expected sections[*].body validator error, got ${problem}`,
+  );
+});
+
 test("normalizeKredietworkflowFinancierPayload: object body without recognised text fields stays invalid (no invention)", () => {
   const sample = buildFinancierSample();
   (sample.creditReport.sections[0] as unknown as { body: unknown }).body = {

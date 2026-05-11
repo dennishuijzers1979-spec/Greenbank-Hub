@@ -679,14 +679,31 @@ export function normalizeKredietworkflowFinancierPayload(
  * leave the original value so the validator rejects it". Never invents
  * memo content, risico's, conclusies, voorwaarden of cijfers.
  *
- * Recognized shapes:
+ * Recognized shapes (and ONLY these — anything else returns `null` so
+ * the validator still rejects, never coerced silently):
+ *
  *  - `string`                       → trimmed (empty kept; validator allows "")
- *  - `string[]`                     → trimmed non-empty entries joined with "\n\n"
- *  - `{ body | text | summary | content | description | analysis }`
- *                                   → first non-empty string field wins (recurses
- *                                     once into the same set of recognised text
- *                                     fields if the value is itself an object)
+ *  - homogeneous `string[]`         → trimmed entries (empty entries dropped)
+ *                                     joined with `"\n\n"`. If ANY entry is
+ *                                     non-string, the whole array is rejected
+ *                                     (returns `null`) so a mixed-type array
+ *                                     such as `[42, "ok"]` cannot mask a real
+ *                                     schema error.
+ *  - homogeneous array of recognised-text objects (only used at the
+ *    top level, depth=0) → each item is coerced via the object rule
+ *                                     below; if ANY item fails to coerce, the
+ *                                     whole array is rejected.
+ *  - `{ body | text | summary | content | description | analysis: string }`
+ *                                   → first non-empty STRING field wins,
+ *                                     trimmed. Nested objects/arrays under
+ *                                     these keys are NOT recursed into — they
+ *                                     return `null` so the validator still
+ *                                     rejects (no invention of structure).
  *  - anything else                  → `null` (leave value as-is)
+ *
+ * `depth` is the recursion depth; only depth=0 allows arrays-of-objects
+ * to recurse into their items as objects, preventing
+ * `[[[...]]]` / `{body:{body:{body:...}}}` infinite spelunking.
  */
 const SECTION_BODY_TEXT_KEYS = [
   "body",
@@ -700,22 +717,33 @@ const SECTION_BODY_TEXT_KEYS = [
 function coerceSectionBody(raw: unknown, depth = 0): string | null {
   if (typeof raw === "string") return raw.trim();
   if (Array.isArray(raw)) {
+    if (raw.length === 0) return null;
     const parts: string[] = [];
     for (const item of raw) {
       if (typeof item === "string") {
         const t = item.trim();
         if (t !== "") parts.push(t);
-      } else if (depth < 1 && (isObject(item) || Array.isArray(item))) {
-        // Allow one level of recursion into items so e.g. an array of
-        // {text:"..."} blocks can be flattened. Never invents content.
-        const nested = coerceSectionBody(item, depth + 1);
-        if (nested !== null && nested !== "") parts.push(nested);
+        continue;
       }
+      if (depth === 0 && isObject(item)) {
+        // Allow one level of recursion into items so an array of
+        // {text:"..."} blocks can be flattened. Object-only — never
+        // recurse into nested arrays here.
+        const nested = coerceSectionBody(item, depth + 1);
+        if (nested === null) return null; // mixed/malformed → fail fast
+        const nt = nested.trim();
+        if (nt !== "") parts.push(nt);
+        continue;
+      }
+      // Non-string AND not a recursable object → mixed/unsupported
+      // shape; fail fast so we never mask a real schema error by
+      // silently dropping entries.
+      return null;
     }
     if (parts.length === 0) return null;
     return parts.join("\n\n");
   }
-  if (isObject(raw) && depth <= 1) {
+  if (isObject(raw)) {
     for (const key of SECTION_BODY_TEXT_KEYS) {
       const v = (raw as Record<string, unknown>)[key];
       if (typeof v === "string") {
@@ -723,7 +751,8 @@ function coerceSectionBody(raw: unknown, depth = 0): string | null {
         if (t !== "") return t;
       }
     }
-    // No matching textual field at this depth — do not invent.
+    // No matching textual field — do not invent and do not recurse
+    // into nested objects/arrays under these keys.
     return null;
   }
   return null;

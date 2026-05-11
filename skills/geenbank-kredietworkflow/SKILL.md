@@ -659,8 +659,14 @@ completeness / correctness / viability scores and the central gate.
   conclusion that is not already present elsewhere on the canonical
   payload.
 
-`creditReport.summary` and `creditReport.sections` remain strictly
-required and are **not** normalized — produce real Dutch content.
+`creditReport.summary` remains strictly required and is **not**
+normalized — produce real Dutch content. `creditReport.sections` is
+also strictly required (validator rejects anything that is not an
+array of `{ title: non-empty string, body: string }`); its titles
+and bodies are normalized only conservatively by
+`normalizeCreditReportSections` (see "Credit-report sections
+(titles + bodies)" below) — sections themselves are never added,
+removed, reordered or invented.
 
 The live adapter normalizes `creditReport.headline` defensively
 (`normalizeCreditReportHeadline`) before schema validation. Priority:
