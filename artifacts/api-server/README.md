@@ -222,10 +222,25 @@ the mapping / live-connection work described in
   keep showing `mock (live)` and the `SkillInvocation.fallbackReason`
   field documents why.
 
-The skill packs for the other four adapters (`credit-product-advisor`,
-`financing-need-assessor`, `geenbank-kredietworkflow`,
-`moneycare-kredietmemorandum-fabriek`) remain placeholders awaiting their
-own archive imports.
+The skill pack for **`geenbank-kredietworkflow`** is the **next** to
+import. Its placeholder under
+[`skills/geenbank-kredietworkflow/SKILL.md`](../../skills/geenbank-kredietworkflow)
+already documents the *Repo integration notes*, the input/output
+contract (including the `creditWorkflowContext` chain hand-off), and
+the output mapping onto `GeenbankKredietworkflowOutput`. A
+forward-only JSON validator lives at
+`artifacts/api-server/src/lib/skills/geenbank-kredietworkflow-schema.ts`
+and is exercised by the test suite, but the adapter still runs the
+deterministic mock and does **not** import the validator at runtime.
+Live invocation will only switch on once the real ChatGPT instructions
+are pasted below the marker line, the adapter callback is wired to
+call OpenAI, and the per-skill
+`AI_SKILL_GEENBANKKREDIETWORKFLOW_PROVIDER=openai` is set.
+
+The skill packs for the remaining three adapters
+(`credit-product-advisor`, `financing-need-assessor`,
+`moneycare-kredietmemorandum-fabriek`) remain placeholders awaiting
+their own archive imports.
 
 ### Live OpenAI pilot — financing-product-advisor-dual-view only
 

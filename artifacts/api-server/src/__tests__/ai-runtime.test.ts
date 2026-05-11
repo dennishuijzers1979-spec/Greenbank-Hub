@@ -45,6 +45,11 @@ import {
   type OpenAIChatClient,
   type OpenAIChatResponse,
 } from "../lib/skills/openai-client";
+import {
+  validateGeenbankKredietworkflowJson,
+  GEENBANK_KREDIETWORKFLOW_VERDICTS,
+  type GeenbankKredietworkflowSkillResponse,
+} from "../lib/skills/geenbank-kredietworkflow-schema";
 
 const DUAL_PROVIDER_ENV = "AI_SKILL_FINANCINGPRODUCTADVISORDUALVIEW_PROVIDER";
 
@@ -1024,3 +1029,145 @@ test("GET /dossiers/:id/dual-view-advice falls back to an earlier analysis run w
     "Kortlopende werkkapitaalfaciliteit",
   );
 });
+
+// --- GeenbankKredietworkflow forward-only schema validator -----------------
+
+const SAMPLE_KREDIETWORKFLOW_RESPONSE: GeenbankKredietworkflowSkillResponse = {
+  confidenceScore: 72,
+  verdict: "voorwaardelijk",
+  verdictSummary:
+    "Test BV laat potentie zien maar er zijn nog enkele aandachtspunten.",
+  entrepreneurReport: {
+    headline: "Je bent dichtbij — een paar aanvullingen maken het verschil.",
+    summary: "Test BV laat potentie zien maar er zijn nog aandachtspunten.",
+    strongPoints: ["Gezonde marge van 20% op de omzet."],
+    weakPoints: ["Cashflow-prognose ontbreekt nog."],
+    actionPoints: ["Upload de cashflow-prognose voor de komende 12 maanden."],
+    likelyFinancierAsks: ["Toelichting op de financieringsbehoefte"],
+    canSubmit: false,
+  },
+  strongPoints: ["Gezonde marge van 20% op de omzet."],
+  weakPoints: ["Cashflow-prognose ontbreekt nog."],
+};
+
+test("validateGeenbankKredietworkflowJson accepts a valid sample response", () => {
+  assert.equal(
+    validateGeenbankKredietworkflowJson(SAMPLE_KREDIETWORKFLOW_RESPONSE),
+    null,
+  );
+});
+
+test("validateGeenbankKredietworkflowJson rejects an out-of-range confidenceScore", () => {
+  const bad = { ...SAMPLE_KREDIETWORKFLOW_RESPONSE, confidenceScore: 150 };
+  const problem = validateGeenbankKredietworkflowJson(bad);
+  assert.ok(problem && /confidenceScore/i.test(problem));
+});
+
+test("validateGeenbankKredietworkflowJson rejects a non-numeric confidenceScore", () => {
+  const bad = { ...SAMPLE_KREDIETWORKFLOW_RESPONSE, confidenceScore: "high" };
+  const problem = validateGeenbankKredietworkflowJson(bad);
+  assert.ok(problem && /confidenceScore/i.test(problem));
+});
+
+test("validateGeenbankKredietworkflowJson rejects an unknown verdict", () => {
+  const bad = { ...SAMPLE_KREDIETWORKFLOW_RESPONSE, verdict: "approved" };
+  const problem = validateGeenbankKredietworkflowJson(bad);
+  assert.ok(problem && /verdict/i.test(problem));
+});
+
+test("validateGeenbankKredietworkflowJson rejects a missing entrepreneurReport", () => {
+  const { entrepreneurReport: _omit, ...rest } = SAMPLE_KREDIETWORKFLOW_RESPONSE;
+  const problem = validateGeenbankKredietworkflowJson(rest);
+  assert.ok(problem && /entrepreneurReport/i.test(problem));
+});
+
+test("validateGeenbankKredietworkflowJson rejects a non-boolean canSubmit", () => {
+  const bad = {
+    ...SAMPLE_KREDIETWORKFLOW_RESPONSE,
+    entrepreneurReport: {
+      ...SAMPLE_KREDIETWORKFLOW_RESPONSE.entrepreneurReport,
+      canSubmit: "yes" as unknown as boolean,
+    },
+  };
+  const problem = validateGeenbankKredietworkflowJson(bad);
+  assert.ok(problem && /canSubmit/i.test(problem));
+});
+
+test("validateGeenbankKredietworkflowJson rejects non-array strongPoints", () => {
+  const bad = { ...SAMPLE_KREDIETWORKFLOW_RESPONSE, strongPoints: "ok" };
+  const problem = validateGeenbankKredietworkflowJson(bad);
+  assert.ok(problem && /strongPoints/i.test(problem));
+});
+
+test("validateGeenbankKredietworkflowJson rejects non-object input", () => {
+  assert.ok(validateGeenbankKredietworkflowJson(null));
+  assert.ok(validateGeenbankKredietworkflowJson("nope"));
+});
+
+test("verdict enum stays in sync with the SKILL.md contract", () => {
+  assert.deepEqual(
+    [...GEENBANK_KREDIETWORKFLOW_VERDICTS].sort(),
+    ["kansrijk", "uitdagend", "voorwaardelijk"],
+  );
+});
+
+test("GeenbankKredietworkflow deterministic mock output passes the forward-only schema validator", async () => {
+  // Regression seam for the upcoming live wiring: the deterministic
+  // mock the adapter returns today must already match the imported
+  // skill JSON contract, so validating the live response with the same
+  // helper cannot regress the gate.
+  const { dossierId } = await createDossier();
+  const [dossier] = await db
+    .select()
+    .from(dossiersTable)
+    .where(inArray(dossiersTable.id, [dossierId]));
+  const ctx = ctxFor(dossier);
+
+  const need = await FinancingNeedAssessorAdapter.run(ctx);
+  const credit = await CreditProductAdvisorAdapter.run(ctx);
+  const dual = await FinancingProductAdvisorDualViewAdapter.run(ctx);
+  const flow = await GeenbankKredietworkflowAdapter.run({
+    ctx,
+    completenessScore: need.data.completenessScore,
+    correctnessScore: credit.data.correctnessScore,
+    viabilityScore: dual.data.viabilityScore,
+    completedDocs: need.data.completedDocs,
+    requiredDocs: need.data.requiredDocs,
+    margin: dual.data.margin,
+    dscr: dual.data.dscr,
+    revenue: dual.data.revenue,
+    profit: dual.data.profit,
+    requested: dual.data.requested,
+  });
+
+  const problem = validateGeenbankKredietworkflowJson(flow.data);
+  assert.equal(
+    problem,
+    null,
+    `mock adapter output should satisfy the live skill schema: ${problem}`,
+  );
+});
+
+test("GeenbankKredietworkflow stays on mock when only OPENAI_API_KEY is set (honesty rule)", async () => {
+  const originals = {
+    AI_SKILL_PROVIDER: process.env.AI_SKILL_PROVIDER,
+    OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+    AI_SKILL_GEENBANKKREDIETWORKFLOW_PROVIDER:
+      process.env.AI_SKILL_GEENBANKKREDIETWORKFLOW_PROVIDER,
+  };
+  delete process.env.AI_SKILL_PROVIDER;
+  delete process.env.AI_SKILL_GEENBANKKREDIETWORKFLOW_PROVIDER;
+  process.env.OPENAI_API_KEY = "sk-test-fake-1234567890";
+  try {
+    const cfg = resolveSkillRuntime("GeenbankKredietworkflow");
+    assert.equal(cfg.provider, "mock");
+    assert.equal(cfg.usedMockMode, true);
+    assert.equal(cfg.fallbackReason, null);
+  } finally {
+    for (const [k, v] of Object.entries(originals)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  }
+});
+

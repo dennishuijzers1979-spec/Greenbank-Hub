@@ -1,0 +1,164 @@
+Preserve baseline behavior from commit 068d67c54544f044eeb8cbf94c76e3f9b0024a55, plus the current main state with:
+- honest AI execution labels
+- live OpenAI FinancingProductAdvisorDualView
+- internal Financier productadvies card
+- login redirect fix
+
+Do not regress:
+- gate tests
+- typed 409 payloads
+- upload gating
+- AI analysis gating
+- submit gating
+- officer visibility
+- RBAC
+- document download permissions
+- Dutch UI language
+- server-side-only skill invocation
+- mock fallback behavior
+- AI skill invocation observability
+- live OpenAI fallback behavior
+- internal dual-view product advice UI
+- login redirect fix
+
+Task: Prepare GeenbankKredietworkflow as the second live OpenAI skill, but do not enable it until its real skill pack is imported and mapped.
+
+Context:
+The intended AI chain is:
+1. GeenbankKredietworkflow ingests the full dossier and produces the core credit workflow/report context.
+2. FinancingProductAdvisorDualView uses that context to match the financing product, entrepreneur need, and financier possibilities.
+3. FinancingNeedAssessor supports need/product fit.
+4. MoneycareKredietmemorandum formats the final partner-specific memorandum.
+
+Current state:
+- FinancingProductAdvisorDualView has a working live OpenAI implementation.
+- GeenbankKredietworkflow is still deterministic/mock.
+- Dual-view currently works but lacks upstream workflow context.
+
+Goal:
+Prepare the repository and adapter for importing and wiring the real GeenbankKredietworkflow skill safely, without changing runtime behavior yet.
+
+1. Inspect current GeenbankKredietworkflowAdapter
+
+Review:
+- current input/output contract
+- mock output
+- how it contributes to verdict, confidence, strong/weak points, entrepreneur report, and gate behavior
+- where its output is passed to downstream reports/adapters
+
+Do not change scoring/gating behavior in this task.
+
+2. Create/complete skill pack placeholder
+
+Ensure this folder exists and is ready:
+
+skills/geenbank-kredietworkflow/
+
+If it has a placeholder SKILL.md, update it with a strong import template:
+- paste/export real ChatGPT skill instructions here
+- expected adapter input
+- expected JSON output
+- no secrets
+- Dutch NL-NL free text
+- stable machine enums
+- auditable output
+- do not hallucinate missing financial data
+- clearly separate blocking and non-blocking findings
+
+3. Document mapping
+
+Update docs/ai-skill-source-mapping.md for GeenbankKredietworkflow.
+
+Document:
+- current mock behavior
+- intended role in the skill chain
+- input it should receive:
+  - normalized dossier data
+  - required document status
+  - extracted financials
+  - current scores
+  - conditions
+  - dual-view context if applicable later
+- expected output:
+  - verdict
+  - verdictSummary
+  - confidenceScore
+  - strongPoints
+  - weakPoints
+  - entrepreneurReport fields
+  - blocking/non-blocking condition suggestions
+  - credit workflow context for downstream skills
+- mapping into current GeenbankKredietworkflowAdapter output
+- what must remain deterministic for gate stability
+
+4. Add schema contract for future live output
+
+Add a typed schema or zod schema for the expected live GeenbankKredietworkflow output, but do not call OpenAI yet.
+
+The schema should validate at least:
+- verdict enum
+- verdictSummary string
+- confidenceScore 0-100
+- strongPoints string[]
+- weakPoints string[]
+- entrepreneurReport:
+  - headline
+  - summary
+  - strongPoints
+  - weakPoints
+  - actionPoints
+  - likelyFinancierAsks
+  - canSubmit boolean
+- optional creditWorkflowContext object for downstream use
+
+5. Add tests
+
+Add tests that:
+- validate a good sample GeenbankKredietworkflow live-output JSON
+- reject missing/invalid confidenceScore
+- reject invalid verdict enum
+- confirm current mock adapter behavior is unchanged
+- confirm no provider env var means the adapter remains deterministic/mock
+- confirm setting unrelated OpenAI env vars does not make this adapter live
+
+Do not require real OpenAI credentials.
+
+6. Runtime behavior
+
+Do not enable live invocation yet.
+Do not add new required env vars.
+Do not call OpenAI from GeenbankKredietworkflowAdapter yet.
+Do not change the number of live skills.
+
+7. README update
+
+Document:
+- GeenbankKredietworkflow is the recommended next skill to import/live-wire
+- what the project owner must provide from ChatGPT Skills
+- where to put the skill archive/instructions
+- how this skill will improve the dual-view context later
+
+8. Run checks
+
+Run:
+pnpm --filter @workspace/api-server run test
+pnpm run typecheck
+pnpm run build
+node scripts/check-skill-packs.mjs
+
+9. Commit and push
+
+Commit with:
+
+Geenbank Hub: prepare kredietworkflow skill integration
+
+10. Report back
+
+Report:
+- changed files
+- test/typecheck/build output
+- current GeenbankKredietworkflow mock behavior
+- expected live output schema
+- what I need to provide from ChatGPT Skills
+- whether any runtime behavior changed
+- known limitations

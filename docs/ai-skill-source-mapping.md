@@ -143,6 +143,42 @@ under the *Repo integration notes* section.
 | Required env | `OPENAI_API_KEY`, `AI_SKILL_GEENBANKKREDIETWORKFLOW_ASSISTANT_ID`. |
 | Risks / validation | Must produce **Dutch** UI strings (the FE renders them verbatim). `canSubmit` must respect `GATE_THRESHOLDS`. Add a unit assertion that the response is parseable JSON before persisting. |
 
+#### Chain role + `creditWorkflowContext`
+
+`GeenbankKredietworkflow` is **step 1** of the intended skill chain
+(see `PipelineContext` in
+`artifacts/api-server/src/lib/skills/types.ts`). When the upstream
+adapters move from mock to live, the dual-view advisor + financing
+need assessor outputs are forwarded into this skill via a
+`creditWorkflowContext` object on the input payload:
+
+```jsonc
+{
+  // existing input fields (dossier, scores, metrics, documents)
+  "creditWorkflowContext": {
+    "dualView": null,         // FinancingProductAdvisorDualView output (when live)
+    "needAssessment": null,   // FinancingNeedAssessor output (when live)
+    "creditAdvice": null      // CreditProductAdvisor output (when live)
+  }
+}
+```
+
+Today every slot is `null` — the adapter is fully deterministic and
+does not yet thread upstream skill output through. The slot exists so
+that the live skill can quote back the same strengths / weaknesses /
+indicative product structure that the financier sees, without re-
+reasoning them. Schema-wise, the validator
+(`artifacts/api-server/src/lib/skills/geenbank-kredietworkflow-schema.ts`)
+guards only the **output**; the input shape is documented in
+[`skills/geenbank-kredietworkflow/SKILL.md`](../skills/geenbank-kredietworkflow/SKILL.md)
+under *Expected input from adapter*.
+
+The schema validator + `SKILL.md` are imported in lockstep with this
+section. Adding either does NOT enable live invocation — that
+requires `AI_SKILL_GEENBANKKREDIETWORKFLOW_PROVIDER=openai`,
+`OPENAI_API_KEY`, and a real implementation inside the adapter
+callback.
+
 ### 5. moneycare-kredietmemorandum-fabriek
 
 | Field | Value |
