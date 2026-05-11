@@ -401,6 +401,47 @@ The *AI uitvoeringsdetails* panel reflects this honestly:
 scrubbed defensively from `extras` / `inputSummary` / `outputSummary` /
 `errorMessage` by `runtime.scrubSecrets`.
 
+#### Pricing-rate output (numeric vs textual)
+
+Every facility-structure node (`requestedStructure`,
+`recommendedStructure`, `commercialProposal.structure`,
+`termSheet.structure`) carries two pricing-rate slots:
+
+* **`rate: number | null`** — use when an exact pricing percentage is
+  known (e.g. `8.5` for 8,5%, or `0.069` if you express it as a
+  decimal). MUST be a finite number or `null`. **Never** put textual
+  pricing here.
+* **`rateComment: string | null`** *(optional)* — use when only
+  indicative or non-numeric pricing is known: ranges (`"8-10%"`),
+  qualitative notes (`"marktconform"`, `"nader te bepalen"`), or any
+  caveat that cannot be expressed as a single finite number. When you
+  fill `rateComment`, set `rate: null`.
+
+The live adapter normalizes common LLM shapes
+(`normalizeKredietworkflowFinancierPayload` in
+`geenbank-kredietworkflow-financier-schema.ts`) **before** schema
+validation, so the following inputs are accepted without falling back
+to mock:
+
+| LLM rate value | Normalized result |
+| --- | --- |
+| `0.069`, `8.5` | `rate = 0.069` / `8.5`, `rateComment` unchanged |
+| `"8.5%"`, `"8,5%"`, `"8.5 %"` | `rate = 8.5`, `rateComment` unchanged |
+| `"0,069"`, `"0.069"` | `rate = 0.069`, `rateComment` unchanged |
+| `"8-10%"`, `"8 - 10%"` | `rate = null`, `rateComment = "8-10%"` |
+| `"marktconform"`, `"nader te bepalen"` | `rate = null`, `rateComment = "marktconform"` |
+| `null`, `""` | `rate = null` |
+
+The normalizer **never** produces `NaN` and **never** crashes the
+pipeline. It only touches `rate` / `rateComment`; every other field
+(facility type, amount, tenor, decision enum, etc.) is still validated
+strictly. Genuinely malformed payloads still trigger the deterministic
+mock fallback with a structured `fallbackReason`.
+
+Pricing/rate has no effect on `entrepreneurReport.canSubmit` or on
+`GATE_THRESHOLDS` — those remain driven exclusively by completeness /
+correctness / viability scores and the central gate.
+
 ### Canonical credit-analysis framing (landed)
 
 This skill is now treated as the **canonical credit-analysis engine**

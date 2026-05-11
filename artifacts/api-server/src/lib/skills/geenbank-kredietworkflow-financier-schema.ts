@@ -57,7 +57,23 @@ export type GeenbankKredietworkflowBorrower = {
 export type GeenbankKredietworkflowStructure = {
   facilityType: string;
   amount: number | null;
+  /**
+   * Numeric interest / pricing percentage when an exact rate is known.
+   * MUST be a finite number or `null`. Textual or indicative pricing
+   * (e.g. ranges, "marktconform", "nader te bepalen") MUST be expressed
+   * via `rateComment` instead — the live adapter normalizes common LLM
+   * shapes (`"8.5%"`, `"8,5%"` → numeric; `"8-10%"`, `"marktconform"`
+   * → `rate=null` + `rateComment`) before validation. See
+   * `normalizeKredietworkflowFinancierPayload`.
+   */
   rate: number | null;
+  /**
+   * Free-text caveat / indicative pricing note used when `rate` cannot
+   * be expressed as a single finite number (e.g. ranges, "marktconform",
+   * "nader te bepalen"). Optional. Never put numeric pricing here that
+   * could be expressed as `rate`.
+   */
+  rateComment?: string | null;
   /** Free-text tenor / repayment profile (e.g. "60 mnd, lineair"). */
   tenor?: string | null;
   repaymentProfile?: string | null;
@@ -245,7 +261,102 @@ function validateStructure(label: string, value: unknown): string | null {
   if (!isNullableFiniteNumber(value.rate)) {
     return `${label}.rate is geen geldig getal of null`;
   }
+  if (
+    value.rateComment !== undefined &&
+    value.rateComment !== null &&
+    typeof value.rateComment !== "string"
+  ) {
+    return `${label}.rateComment is geen string of null`;
+  }
   return null;
+}
+
+/**
+ * Normalize a single facility-structure node's `rate` field in place.
+ * - Finite number → kept as-is.
+ * - `null` / `undefined` / empty string → `rate = null`.
+ * - Numeric-looking string ("8.5%", "8,5%", "8.5", "0.069", with optional
+ *   leading sign and trailing percent) → parsed to a finite number.
+ *   `rateComment` is preserved if already set.
+ * - Anything else (range like "8-10%", text like "marktconform",
+ *   `NaN`, arrays, objects) → `rate = null` and the original textual
+ *   value is preserved on `rateComment` (without overwriting an
+ *   existing non-empty `rateComment`).
+ *
+ * Never produces `NaN` and never throws. Only mutates `rate` /
+ * `rateComment`; all other fields are left untouched so the validator
+ * can still reject genuinely malformed structures.
+ */
+function normalizeStructureRate(structure: unknown): void {
+  if (!isObject(structure)) return;
+  const rawRate = structure.rate;
+  const existingComment =
+    typeof structure.rateComment === "string" && structure.rateComment.trim() !== ""
+      ? structure.rateComment
+      : null;
+
+  if (typeof rawRate === "number" && Number.isFinite(rawRate)) return;
+
+  if (rawRate === null || rawRate === undefined) {
+    structure.rate = null;
+    return;
+  }
+
+  if (typeof rawRate === "string") {
+    const trimmed = rawRate.trim();
+    if (trimmed === "") {
+      structure.rate = null;
+      return;
+    }
+    // Single percentage / decimal: optional sign, digits, optional
+    // decimal separator (`.` or `,`), optional `%`. Whitespace allowed
+    // around the `%`. Range strings like "8-10%" intentionally do NOT
+    // match (the inner hyphen breaks the pattern).
+    const singleMatch = /^[+-]?\d+(?:[.,]\d+)?\s*%?$/.test(trimmed);
+    if (singleMatch) {
+      const num = Number(trimmed.replace(/[%\s]/g, "").replace(",", "."));
+      if (Number.isFinite(num)) {
+        structure.rate = num;
+        return;
+      }
+    }
+    structure.rate = null;
+    if (!existingComment) structure.rateComment = trimmed;
+    return;
+  }
+
+  // Any other shape (NaN, boolean, array, nested object) — keep null
+  // and surface the textual form so loan officers see what came back.
+  structure.rate = null;
+  if (!existingComment) structure.rateComment = String(rawRate);
+}
+
+/**
+ * Normalize the `rate` field on every facility-structure node inside a
+ * raw `geenbank-kredietworkflow` financier-shape JSON payload, before
+ * validation. Operates in place on the parsed object and is safe to
+ * call on any unknown value (no-op for non-objects). Touches:
+ *   - `requestedStructure`
+ *   - `recommendedStructure`
+ *   - `commercialProposal.structure`
+ *   - `termSheet.structure`
+ *
+ * Does NOT touch any other field — the validator still rejects
+ * genuinely malformed payloads (bad enum, missing arrays, etc.) and
+ * the live adapter still falls back to the deterministic mock with a
+ * structured `fallbackReason`.
+ */
+export function normalizeKredietworkflowFinancierPayload(parsed: unknown): unknown {
+  if (!isObject(parsed)) return parsed;
+  normalizeStructureRate(parsed.requestedStructure);
+  normalizeStructureRate(parsed.recommendedStructure);
+  if (isObject(parsed.commercialProposal)) {
+    normalizeStructureRate(parsed.commercialProposal.structure);
+  }
+  if (isObject(parsed.termSheet)) {
+    normalizeStructureRate(parsed.termSheet.structure);
+  }
+  return parsed;
 }
 
 function validateRiskAnalysis(value: unknown): string | null {

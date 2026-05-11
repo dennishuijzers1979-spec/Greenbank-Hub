@@ -4,6 +4,7 @@ import {
   type MappedKredietworkflowAppAnalysis,
 } from "./geenbank-kredietworkflow-financier-mapper";
 import {
+  normalizeKredietworkflowFinancierPayload,
   validateGeenbankKredietworkflowFinancierJson,
   type GeenbankKredietworkflowFinancierOutput,
 } from "./geenbank-kredietworkflow-financier-schema";
@@ -319,6 +320,11 @@ async function callOpenAISkill(
     const msg = err instanceof Error ? err.message : String(err);
     throw new Error(`OpenAI antwoord was geen geldige JSON: ${msg}`);
   }
+  // Normalize common LLM pricing-rate shapes BEFORE validation.
+  // Maps "8.5%" / "8,5%" → numeric, range / "marktconform" /
+  // "nader te bepalen" → rate=null + rateComment. Never produces NaN.
+  // Schema validation still rejects every other malformed field.
+  parsed = normalizeKredietworkflowFinancierPayload(parsed);
   const problem = validateGeenbankKredietworkflowFinancierJson(parsed);
   if (problem) throw new Error(`Skill-antwoord ongeldig: ${problem}`);
 

@@ -51,6 +51,7 @@ import {
   type GeenbankKredietworkflowSkillResponse,
 } from "../lib/skills/geenbank-kredietworkflow-schema";
 import {
+  normalizeKredietworkflowFinancierPayload,
   validateGeenbankKredietworkflowFinancierJson,
   GEENBANK_KREDIETWORKFLOW_DECISIONS,
   GEENBANK_KREDIETWORKFLOW_FEASIBILITIES,
@@ -1952,6 +1953,257 @@ test("kredietworkflow adapter sends borrower.name (not companyName) in the live 
         assert.equal(capturedPayload!.borrower?.name, "Brouwerij Noord B.V.");
         // Old field name must NOT be present — the schema expects `name`.
         assert.equal(capturedPayload!.borrower?.companyName, undefined);
+      },
+    );
+  } finally {
+    setOpenAIChatClientForTesting(null);
+  }
+});
+
+// --- pricing-rate normalization (live OpenAI shape) ----------------------
+//
+// These tests exercise the pure pricing-rate normalizer used by the
+// live kredietworkflow adapter BEFORE schema validation. They never
+// call real OpenAI. They guard against three regressions:
+//   1. numeric rates must pass through untouched,
+//   2. common percent-string LLM shapes must parse to a finite number,
+//   3. textual / range / "marktconform" rates must NOT become NaN —
+//      they land in `rateComment` with `rate=null`.
+// The validator must continue to reject genuinely malformed payloads
+// (bad enum, missing arrays, etc.); pricing normalization is scoped.
+
+test("normalizeKredietworkflowFinancierPayload: numeric rate passes through", () => {
+  const sample = buildFinancierSample();
+  const before = sample.requestedStructure.rate;
+  normalizeKredietworkflowFinancierPayload(sample);
+  assert.equal(sample.requestedStructure.rate, before);
+  assert.equal(sample.requestedStructure.rate, 0.069);
+  assert.equal(validateGeenbankKredietworkflowFinancierJson(sample), null);
+});
+
+test("normalizeKredietworkflowFinancierPayload: \"8.5%\" parses to numeric on every structure node", () => {
+  const sample = buildFinancierSample();
+  // Force every structure-bearing node to carry the percent-string shape.
+  (sample.requestedStructure as unknown as { rate: unknown }).rate = "8.5%";
+  (sample.recommendedStructure as unknown as { rate: unknown }).rate = "8.5%";
+  (sample.commercialProposal.structure as unknown as { rate: unknown }).rate =
+    "8.5%";
+  (sample.termSheet.structure as unknown as { rate: unknown }).rate = "8.5%";
+  normalizeKredietworkflowFinancierPayload(sample);
+  assert.equal(sample.requestedStructure.rate, 8.5);
+  assert.equal(sample.recommendedStructure.rate, 8.5);
+  assert.equal(sample.commercialProposal.structure.rate, 8.5);
+  assert.equal(sample.termSheet.structure.rate, 8.5);
+  assert.equal(validateGeenbankKredietworkflowFinancierJson(sample), null);
+});
+
+test("normalizeKredietworkflowFinancierPayload: \"8,5%\" (Dutch comma decimal) parses to numeric", () => {
+  const sample = buildFinancierSample();
+  (sample.requestedStructure as unknown as { rate: unknown }).rate = "8,5%";
+  normalizeKredietworkflowFinancierPayload(sample);
+  assert.equal(sample.requestedStructure.rate, 8.5);
+  assert.equal(validateGeenbankKredietworkflowFinancierJson(sample), null);
+});
+
+test("normalizeKredietworkflowFinancierPayload: range \"8-10%\" stays non-numeric, lands in rateComment, never NaN", () => {
+  const sample = buildFinancierSample();
+  (sample.requestedStructure as unknown as { rate: unknown }).rate = "8-10%";
+  normalizeKredietworkflowFinancierPayload(sample);
+  assert.equal(sample.requestedStructure.rate, null);
+  assert.equal(sample.requestedStructure.rateComment, "8-10%");
+  assert.ok(
+    !Number.isNaN(sample.requestedStructure.rate as unknown as number),
+    "rate must never be NaN",
+  );
+  assert.equal(validateGeenbankKredietworkflowFinancierJson(sample), null);
+});
+
+test("normalizeKredietworkflowFinancierPayload: \"marktconform\" → rateComment + rate null", () => {
+  const sample = buildFinancierSample();
+  (sample.requestedStructure as unknown as { rate: unknown }).rate =
+    "marktconform";
+  normalizeKredietworkflowFinancierPayload(sample);
+  assert.equal(sample.requestedStructure.rate, null);
+  assert.equal(sample.requestedStructure.rateComment, "marktconform");
+  assert.equal(validateGeenbankKredietworkflowFinancierJson(sample), null);
+});
+
+test("normalizeKredietworkflowFinancierPayload: missing rate but rateComment present is valid", () => {
+  const sample = buildFinancierSample();
+  (sample.requestedStructure as unknown as { rate: unknown }).rate = null;
+  sample.requestedStructure.rateComment = "nader te bepalen";
+  normalizeKredietworkflowFinancierPayload(sample);
+  assert.equal(sample.requestedStructure.rate, null);
+  assert.equal(sample.requestedStructure.rateComment, "nader te bepalen");
+  assert.equal(validateGeenbankKredietworkflowFinancierJson(sample), null);
+});
+
+test("normalizeKredietworkflowFinancierPayload: NaN-shaped numbers get coerced to null (no validator NaN leak)", () => {
+  const sample = buildFinancierSample();
+  (sample.requestedStructure as unknown as { rate: unknown }).rate = Number.NaN;
+  normalizeKredietworkflowFinancierPayload(sample);
+  assert.equal(sample.requestedStructure.rate, null);
+  assert.equal(validateGeenbankKredietworkflowFinancierJson(sample), null);
+});
+
+test("normalizeKredietworkflowFinancierPayload: existing rateComment is preserved when rate is non-numeric", () => {
+  const sample = buildFinancierSample();
+  (sample.requestedStructure as unknown as { rate: unknown }).rate = "8-10%";
+  sample.requestedStructure.rateComment = "Pre-existing officer note";
+  normalizeKredietworkflowFinancierPayload(sample);
+  assert.equal(sample.requestedStructure.rate, null);
+  // Existing comment must NOT be overwritten by the raw rate string.
+  assert.equal(
+    sample.requestedStructure.rateComment,
+    "Pre-existing officer note",
+  );
+});
+
+test("normalizeKredietworkflowFinancierPayload: unrelated invalid fields still fail validation after normalization", () => {
+  const sample = buildFinancierSample();
+  (sample.requestedStructure as unknown as { rate: unknown }).rate = "8.5%";
+  // Unrelated regression: bad decision enum must still be rejected.
+  const bad = { ...sample, decision: "approved" };
+  normalizeKredietworkflowFinancierPayload(bad);
+  const problem = validateGeenbankKredietworkflowFinancierJson(bad);
+  assert.ok(problem && /decision/i.test(problem));
+});
+
+test("validateGeenbankKredietworkflowFinancierJson rejects rateComment of wrong type", () => {
+  const sample = buildFinancierSample();
+  (sample.requestedStructure as unknown as { rateComment: unknown }).rateComment =
+    42;
+  const problem = validateGeenbankKredietworkflowFinancierJson(sample);
+  assert.ok(problem && /rateComment/i.test(problem));
+});
+
+test("kredietworkflow adapter: live OpenAI returning \"8.5%\" rate is normalized + accepted (no fallback)", async () => {
+  const { dossierId } = await createDossier();
+  const [dossier] = await db
+    .select()
+    .from(dossiersTable)
+    .where(inArray(dossiersTable.id, [dossierId]));
+  // Build a live response with a percent-string rate on every
+  // structure node — this is exactly the shape that triggered the
+  // production failure ("requestedStructure.rate is geen geldig
+  // getal of null").
+  const liveResponse = buildFinancierSample();
+  (liveResponse.requestedStructure as unknown as { rate: unknown }).rate =
+    "8.5%";
+  (liveResponse.recommendedStructure as unknown as { rate: unknown }).rate =
+    "8.5%";
+  (liveResponse.commercialProposal.structure as unknown as { rate: unknown }).rate =
+    "8.5%";
+  (liveResponse.termSheet.structure as unknown as { rate: unknown }).rate =
+    "8.5%";
+  setOpenAIChatClientForTesting(
+    makeFakeOpenAI(() => ({
+      content: JSON.stringify(liveResponse),
+      model: "gpt-4o-mini",
+    })),
+  );
+  try {
+    await withKwEnv(
+      { [KW_PROVIDER_ENV]: "openai", OPENAI_API_KEY: "sk-test-fake-1234567890" },
+      async () => {
+        const r = await GeenbankKredietworkflowAdapter.run(buildKwArgs(dossier));
+        // Live path succeeded; no fallback to mock.
+        assert.equal(r.ok, true);
+        assert.equal(r.usedMockMode, false);
+        assert.equal(r.invocation.fallbackReason, null);
+        // Canonical canonical retains the normalized numeric rate.
+        const extras = r.invocation.extras as
+          | { canonical?: GeenbankKredietworkflowFinancierOutput }
+          | null;
+        assert.ok(extras?.canonical);
+        assert.equal(extras!.canonical!.requestedStructure.rate, 8.5);
+        assert.equal(extras!.canonical!.recommendedStructure.rate, 8.5);
+      },
+    );
+  } finally {
+    setOpenAIChatClientForTesting(null);
+  }
+});
+
+test("kredietworkflow adapter: live OpenAI returning \"marktconform\" rate normalizes to rateComment (no fallback)", async () => {
+  const { dossierId } = await createDossier();
+  const [dossier] = await db
+    .select()
+    .from(dossiersTable)
+    .where(inArray(dossiersTable.id, [dossierId]));
+  const liveResponse = buildFinancierSample();
+  (liveResponse.requestedStructure as unknown as { rate: unknown }).rate =
+    "marktconform";
+  (liveResponse.recommendedStructure as unknown as { rate: unknown }).rate =
+    "marktconform";
+  (liveResponse.commercialProposal.structure as unknown as { rate: unknown }).rate =
+    "marktconform";
+  (liveResponse.termSheet.structure as unknown as { rate: unknown }).rate =
+    "marktconform";
+  setOpenAIChatClientForTesting(
+    makeFakeOpenAI(() => ({
+      content: JSON.stringify(liveResponse),
+      model: "gpt-4o-mini",
+    })),
+  );
+  try {
+    await withKwEnv(
+      { [KW_PROVIDER_ENV]: "openai", OPENAI_API_KEY: "sk-test-fake-1234567890" },
+      async () => {
+        const r = await GeenbankKredietworkflowAdapter.run(buildKwArgs(dossier));
+        assert.equal(r.ok, true);
+        assert.equal(r.usedMockMode, false);
+        assert.equal(r.invocation.fallbackReason, null);
+        const extras = r.invocation.extras as
+          | { canonical?: GeenbankKredietworkflowFinancierOutput }
+          | null;
+        assert.ok(extras?.canonical);
+        assert.equal(extras!.canonical!.requestedStructure.rate, null);
+        assert.equal(
+          extras!.canonical!.requestedStructure.rateComment,
+          "marktconform",
+        );
+      },
+    );
+  } finally {
+    setOpenAIChatClientForTesting(null);
+  }
+});
+
+test("kredietworkflow adapter: live OpenAI with truly invalid rate (boolean) still falls back to mock cleanly", async () => {
+  // NB: a boolean rate is normalized to `rate=null + rateComment=String(rawRate)`,
+  // so the structure becomes valid. To exercise the *fallback* path we
+  // need a different field to be malformed — confirming pricing
+  // normalization does NOT swallow unrelated schema violations.
+  const { dossierId } = await createDossier();
+  const [dossier] = await db
+    .select()
+    .from(dossiersTable)
+    .where(inArray(dossiersTable.id, [dossierId]));
+  const liveResponse = buildFinancierSample();
+  (liveResponse.requestedStructure as unknown as { rate: unknown }).rate = true;
+  // Now break an unrelated field that the normalizer does NOT touch.
+  (liveResponse as unknown as { decision: unknown }).decision = "approved";
+  setOpenAIChatClientForTesting(
+    makeFakeOpenAI(() => ({
+      content: JSON.stringify(liveResponse),
+      model: "gpt-4o-mini",
+    })),
+  );
+  try {
+    await withKwEnv(
+      { [KW_PROVIDER_ENV]: "openai", OPENAI_API_KEY: "sk-test-fake-1234567890" },
+      async () => {
+        const r = await GeenbankKredietworkflowAdapter.run(buildKwArgs(dossier));
+        assert.equal(r.usedMockMode, true);
+        assert.equal(r.invocation.provider, "openai");
+        assert.ok(
+          r.invocation.fallbackReason &&
+            /decision/i.test(r.invocation.fallbackReason),
+          `unexpected fallbackReason: ${r.invocation.fallbackReason}`,
+        );
+        // Deterministic mock still produced an answer.
+        assert.ok(r.data.verdict);
       },
     );
   } finally {
