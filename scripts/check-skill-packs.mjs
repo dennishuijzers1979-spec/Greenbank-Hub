@@ -60,6 +60,35 @@ const IMPORTED_SKILLS = [
       "viabilityScore",
     ],
   },
+  {
+    name: "geenbank-kredietworkflow",
+    requiredFiles: [
+      "SKILL.md",
+      "agents/openai.yaml",
+      "references/input-schema.md",
+      "references/output-specs.md",
+      "references/acceptatiecriteria.md",
+      "references/pricing-matrix.md",
+      "references/project-instruction.md",
+      "assets/executive-summary-template.docx",
+      "assets/tarieven-lijst-geenbank.xlsx",
+    ],
+    // Output markers from the imported (financier-shape) skill payload.
+    requiredOutputKeys: [
+      "decision",
+      "feasibility_assessment",
+      "recommended_structure",
+      "policy_breaches",
+    ],
+    // Mapping markers proving the repo integration notes + mismatch
+    // documentation are present and not silently dropped.
+    requiredMappingMarkers: [
+      "Repo integration notes (forward-only — adapter still on mock)",
+      "Mapping mismatch with the prepared adapter schema",
+      "creditWorkflowContext",
+      "AI_SKILL_GEENBANKKREDIETWORKFLOW_PROVIDER",
+    ],
+  },
 ];
 
 for (const skill of IMPORTED_SKILLS) {
