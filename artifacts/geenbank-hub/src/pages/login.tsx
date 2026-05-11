@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useLocation } from "wouter";
 import { useLogin, useGetCurrentUser } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -16,22 +16,34 @@ export default function Login() {
   const queryClient = useQueryClient();
   const { data: session, isLoading: sessionLoading } = useGetCurrentUser();
   const loginMutation = useLogin();
+  const hasRedirectedRef = useRef(false);
+
+  const userId = session?.user?.id ?? null;
+  const firstLoginCompleted = session?.user?.firstLoginCompleted ?? null;
 
   useEffect(() => {
-    if (session?.user) {
-      if (!session.user.firstLoginCompleted) {
-        setLocation("/wachtwoord-wijzigen");
-      } else {
-        setLocation("/dashboard");
-      }
+    if (sessionLoading) return;
+    if (!userId) return;
+    if (hasRedirectedRef.current) return;
+    hasRedirectedRef.current = true;
+    if (firstLoginCompleted === false) {
+      setLocation("/wachtwoord-wijzigen");
+    } else {
+      setLocation("/dashboard");
     }
-  }, [session, setLocation]);
+    // setLocation from wouter is recreated each render; depending on it would
+    // re-fire this effect every render and (combined with the pushState it
+    // performs) cause an infinite update loop. Key off stable primitive
+    // user fields and rely on the ref-guard to ensure a single redirect.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionLoading, userId, firstLoginCompleted]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     loginMutation.mutate({ data: { email, password } }, {
       onSuccess: (data) => {
         queryClient.setQueryData(["/api/auth/me"], data);
+        hasRedirectedRef.current = true;
         if (data.user && !data.user.firstLoginCompleted) {
           setLocation("/wachtwoord-wijzigen");
         } else {
