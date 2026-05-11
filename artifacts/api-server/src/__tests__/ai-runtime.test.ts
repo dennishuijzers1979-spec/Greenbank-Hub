@@ -2550,6 +2550,263 @@ test("kredietworkflow adapter: live OpenAI with truly invalid riskAnalysis (miss
   }
 });
 
+// --- commercialProposal.summary / termSheet.summary normalization -------
+//
+// These tests exercise the pure commercial-proposal-summary normalizer
+// used by the live kredietworkflow adapter BEFORE schema validation.
+// They never call real OpenAI. They guard against four regressions:
+//   1. an existing valid summary is NEVER overwritten on either node,
+//   2. missing/empty summary WITH supporting evidence
+//      (structure / collateral / covenants / conditions / events / fees
+//      / monitoring) derives a concise Dutch summary,
+//   3. missing/empty summary WITHOUT any evidence still triggers
+//      validation failure (we refuse to invent content),
+//   4. derived summary contains content traceable to the source
+//      fields — no hollow / placeholder text.
+
+test("normalizeKredietworkflowFinancierPayload: valid commercialProposal.summary passes through unchanged", () => {
+  const sample = buildFinancierSample();
+  const beforeCp = sample.commercialProposal.summary;
+  const beforeTs = sample.termSheet.summary;
+  normalizeKredietworkflowFinancierPayload(sample);
+  assert.equal(sample.commercialProposal.summary, beforeCp);
+  assert.equal(sample.termSheet.summary, beforeTs);
+  assert.equal(validateGeenbankKredietworkflowFinancierJson(sample), null);
+});
+
+test("normalizeKredietworkflowFinancierPayload: missing commercialProposal.summary with structure+collateral derives Dutch summary", () => {
+  const sample = buildFinancierSample();
+  (sample.commercialProposal as unknown as { summary: unknown }).summary = undefined;
+  normalizeKredietworkflowFinancierPayload(sample);
+  const s = sample.commercialProposal.summary;
+  assert.ok(typeof s === "string" && s.length > 0, `summary should be derived, got ${s}`);
+  assert.match(s, /Voorgestelde structuur:/);
+  assert.match(s, /Annuïteitenlening/);
+  assert.match(s, /Zekerheden:/);
+  assert.match(s, /Persoonlijke borg DGA EUR 50\.000/);
+  assert.match(s, /Convenanten:/);
+  assert.equal(validateGeenbankKredietworkflowFinancierJson(sample), null);
+});
+
+test("normalizeKredietworkflowFinancierPayload: empty-string termSheet.summary with evidence derives summary", () => {
+  const sample = buildFinancierSample();
+  sample.termSheet.summary = "";
+  normalizeKredietworkflowFinancierPayload(sample);
+  const s = sample.termSheet.summary;
+  assert.ok(typeof s === "string" && s.trim().length > 0);
+  assert.match(s, /Voorgestelde structuur:/);
+  assert.equal(validateGeenbankKredietworkflowFinancierJson(sample), null);
+});
+
+test("normalizeKredietworkflowFinancierPayload: whitespace-only commercialProposal.summary with evidence derives summary", () => {
+  const sample = buildFinancierSample();
+  sample.commercialProposal.summary = "   \n  ";
+  normalizeKredietworkflowFinancierPayload(sample);
+  assert.match(sample.commercialProposal.summary, /Voorgestelde structuur:/);
+  assert.equal(validateGeenbankKredietworkflowFinancierJson(sample), null);
+});
+
+test("normalizeKredietworkflowFinancierPayload: null commercialProposal.summary with rateComment-only structure still derives summary", () => {
+  const sample = buildFinancierSample();
+  (sample.commercialProposal as unknown as { summary: unknown }).summary = null;
+  // Strip every other evidence field — only the rateComment in the
+  // structure is left.
+  sample.commercialProposal.collateralPackage = [];
+  sample.commercialProposal.covenantPackage = [];
+  sample.commercialProposal.conditionsPrecedent = [];
+  sample.commercialProposal.eventsOfDefault = [];
+  (sample.commercialProposal as unknown as { fees: unknown }).fees = null;
+  (sample.commercialProposal as unknown as { monitoringCadence: unknown }).monitoringCadence = null;
+  sample.commercialProposal.structure.rate = null;
+  sample.commercialProposal.structure.rateComment = "marktconform";
+  normalizeKredietworkflowFinancierPayload(sample);
+  const s = sample.commercialProposal.summary;
+  assert.ok(typeof s === "string" && s.length > 0);
+  assert.match(s, /Voorgestelde structuur:/);
+  assert.match(s, /tegen marktconform/);
+  assert.equal(validateGeenbankKredietworkflowFinancierJson(sample), null);
+});
+
+test("normalizeKredietworkflowFinancierPayload: missing summary AND no commercial evidence still fails validation (no invented content)", () => {
+  const sample = buildFinancierSample();
+  (sample.commercialProposal as unknown as { summary: unknown }).summary = "";
+  // Strip every supporting field on commercialProposal.
+  (sample.commercialProposal as unknown as { structure: unknown }).structure = {
+    facilityType: "",
+    amount: null,
+    rate: null,
+    rateComment: null,
+    tenor: null,
+  };
+  sample.commercialProposal.collateralPackage = [];
+  sample.commercialProposal.covenantPackage = [];
+  sample.commercialProposal.conditionsPrecedent = [];
+  sample.commercialProposal.eventsOfDefault = [];
+  (sample.commercialProposal as unknown as { fees: unknown }).fees = null;
+  (sample.commercialProposal as unknown as { monitoringCadence: unknown }).monitoringCadence = null;
+  normalizeKredietworkflowFinancierPayload(sample);
+  // Summary must NOT have been invented.
+  assert.equal(sample.commercialProposal.summary, "");
+  const problem = validateGeenbankKredietworkflowFinancierJson(sample);
+  assert.ok(
+    problem && /commercialProposal\.summary/i.test(problem),
+    `expected commercialProposal.summary failure, got ${problem}`,
+  );
+});
+
+test("normalizeKredietworkflowFinancierPayload: existing valid commercialProposal.summary is NEVER overwritten even if other evidence exists", () => {
+  const sample = buildFinancierSample();
+  const original = "Een door de officer goedgekeurde commerciële samenvatting met specifieke nuance.";
+  sample.commercialProposal.summary = original;
+  // Plenty of evidence is present — must still be ignored.
+  normalizeKredietworkflowFinancierPayload(sample);
+  assert.equal(sample.commercialProposal.summary, original);
+});
+
+test("normalizeKredietworkflowFinancierPayload: derived commercial summary only restates source evidence, never invents content", () => {
+  const sample = buildFinancierSample();
+  (sample.commercialProposal as unknown as { summary: unknown }).summary = undefined;
+  sample.commercialProposal.collateralPackage = ["Specifieke zekerheid Alfa"];
+  sample.commercialProposal.covenantPackage = ["Specifieke convenant Bravo"];
+  sample.commercialProposal.conditionsPrecedent = ["Specifieke conditie Charlie"];
+  sample.commercialProposal.eventsOfDefault = ["Specifiek event Delta"];
+  (sample.commercialProposal as unknown as { fees: unknown }).fees = "Specifieke fee Echo";
+  (sample.commercialProposal as unknown as { monitoringCadence: unknown }).monitoringCadence = "Specifieke monitoring Foxtrot";
+  normalizeKredietworkflowFinancierPayload(sample);
+  const s = sample.commercialProposal.summary;
+  for (const token of [
+    "Specifieke zekerheid Alfa",
+    "Specifieke convenant Bravo",
+    "Specifieke conditie Charlie",
+    "Specifiek event Delta",
+    "Specifieke fee Echo",
+    "Specifieke monitoring Foxtrot",
+  ]) {
+    assert.ok(s.includes(token), `derived summary missing token "${token}": ${s}`);
+  }
+  assert.ok(!/geen commercieel/i.test(s), `derived summary must not invent placeholder text: ${s}`);
+});
+
+test("normalizeKredietworkflowFinancierPayload: rate + summary + metrics + commercial summary normalization all work in same payload", () => {
+  const sample = buildFinancierSample();
+  (sample.requestedStructure as unknown as { rate: unknown }).rate = "8.5%";
+  (sample.recommendedStructure as unknown as { rate: unknown }).rate = "marktconform";
+  (sample.riskAnalysis as unknown as { summary: unknown }).summary = "";
+  delete (sample.riskAnalysis as { metrics?: unknown }).metrics;
+  (sample.commercialProposal as unknown as { summary: unknown }).summary = "";
+  sample.termSheet.summary = "";
+  normalizeKredietworkflowFinancierPayload(sample, { deterministicDscr: 4.17 });
+  // Pre-existing normalizers still work.
+  assert.equal(sample.requestedStructure.rate, 8.5);
+  assert.equal(sample.recommendedStructure.rate, null);
+  assert.equal(sample.recommendedStructure.rateComment, "marktconform");
+  assert.match(sample.riskAnalysis.summary, /Belangrijkste risico's:/);
+  assert.equal(sample.riskAnalysis.metrics.dscr, 4.17);
+  // New commercial-proposal summary normalizer works on BOTH nodes.
+  assert.match(sample.commercialProposal.summary, /Voorgestelde structuur:/);
+  assert.match(sample.termSheet.summary, /Voorgestelde structuur:/);
+  assert.equal(validateGeenbankKredietworkflowFinancierJson(sample), null);
+});
+
+test("normalizeKredietworkflowFinancierPayload: unrelated invalid fields still fail validation after commercial summary normalization", () => {
+  const sample = buildFinancierSample();
+  (sample.commercialProposal as unknown as { summary: unknown }).summary = "";
+  // Unrelated regression: bad decision enum must still be rejected.
+  (sample as unknown as { decision: unknown }).decision = "approved";
+  normalizeKredietworkflowFinancierPayload(sample);
+  // commercialProposal.summary was derived…
+  assert.match(sample.commercialProposal.summary, /Voorgestelde structuur:/);
+  // …but the unrelated bad field still fails validation.
+  const problem = validateGeenbankKredietworkflowFinancierJson(sample);
+  assert.ok(problem && /decision/i.test(problem));
+});
+
+test("kredietworkflow adapter: live OpenAI returning empty commercialProposal.summary + termSheet.summary with evidence is normalized + accepted (no fallback)", async () => {
+  const { dossierId } = await createDossier();
+  const [dossier] = await db
+    .select()
+    .from(dossiersTable)
+    .where(inArray(dossiersTable.id, [dossierId]));
+  const liveResponse = buildFinancierSample();
+  // Reproduce the exact production failure mode: empty summary on
+  // BOTH nodes, but useful supporting evidence is present.
+  (liveResponse.commercialProposal as unknown as { summary: unknown }).summary = "";
+  liveResponse.termSheet.summary = "";
+  setOpenAIChatClientForTesting(
+    makeFakeOpenAI(() => ({
+      content: JSON.stringify(liveResponse),
+      model: "gpt-4o-mini",
+    })),
+  );
+  try {
+    await withKwEnv(
+      { [KW_PROVIDER_ENV]: "openai", OPENAI_API_KEY: "sk-test-fake-1234567890" },
+      async () => {
+        const r = await GeenbankKredietworkflowAdapter.run(buildKwArgs(dossier));
+        assert.equal(r.ok, true, `expected live success, got fallbackReason=${r.invocation.fallbackReason}`);
+        assert.equal(r.usedMockMode, false);
+        assert.equal(r.invocation.fallbackReason, null);
+        const extras = r.invocation.extras as
+          | { canonical?: GeenbankKredietworkflowFinancierOutput }
+          | null;
+        assert.ok(extras?.canonical, "extras.canonical must be populated on live success");
+        assert.match(extras!.canonical!.commercialProposal.summary, /Voorgestelde structuur:/);
+        assert.match(extras!.canonical!.termSheet.summary, /Voorgestelde structuur:/);
+      },
+    );
+  } finally {
+    setOpenAIChatClientForTesting(null);
+  }
+});
+
+test("kredietworkflow adapter: live OpenAI returning empty commercialProposal.summary AND empty commercial fields still falls back to mock cleanly", async () => {
+  const { dossierId } = await createDossier();
+  const [dossier] = await db
+    .select()
+    .from(dossiersTable)
+    .where(inArray(dossiersTable.id, [dossierId]));
+  const liveResponse = buildFinancierSample();
+  (liveResponse.commercialProposal as unknown as { summary: unknown }).summary = "";
+  (liveResponse.commercialProposal as unknown as { structure: unknown }).structure = {
+    facilityType: "",
+    amount: null,
+    rate: null,
+    rateComment: null,
+    tenor: null,
+  };
+  liveResponse.commercialProposal.collateralPackage = [];
+  liveResponse.commercialProposal.covenantPackage = [];
+  liveResponse.commercialProposal.conditionsPrecedent = [];
+  liveResponse.commercialProposal.eventsOfDefault = [];
+  (liveResponse.commercialProposal as unknown as { fees: unknown }).fees = null;
+  (liveResponse.commercialProposal as unknown as { monitoringCadence: unknown }).monitoringCadence = null;
+  setOpenAIChatClientForTesting(
+    makeFakeOpenAI(() => ({
+      content: JSON.stringify(liveResponse),
+      model: "gpt-4o-mini",
+    })),
+  );
+  try {
+    await withKwEnv(
+      { [KW_PROVIDER_ENV]: "openai", OPENAI_API_KEY: "sk-test-fake-1234567890" },
+      async () => {
+        const r = await GeenbankKredietworkflowAdapter.run(buildKwArgs(dossier));
+        assert.equal(r.usedMockMode, true);
+        assert.equal(r.invocation.provider, "openai");
+        assert.ok(
+          r.invocation.fallbackReason &&
+            /commercialProposal/i.test(r.invocation.fallbackReason),
+          `unexpected fallbackReason: ${r.invocation.fallbackReason}`,
+        );
+        // Deterministic mock still produces an answer.
+        assert.ok(r.data.verdict);
+      },
+    );
+  } finally {
+    setOpenAIChatClientForTesting(null);
+  }
+});
+
 test("validateGeenbankKredietworkflowFinancierJson rejects rateComment of wrong type", () => {
   const sample = buildFinancierSample();
   (sample.requestedStructure as unknown as { rateComment: unknown }).rateComment =

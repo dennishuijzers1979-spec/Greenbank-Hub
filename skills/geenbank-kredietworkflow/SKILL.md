@@ -549,6 +549,54 @@ orchestrator. A valid model-supplied `dscr` is **never** overridden.
 or on `GATE_THRESHOLDS` — those remain driven exclusively by
 completeness / correctness / viability scores and the central gate.
 
+#### Commercial-proposal & term-sheet summary (required, never empty)
+
+The `commercialProposal` and `termSheet` blocks share the same shape
+(`validateCommercialProposal`) and both carry a required summary that
+loan officers and the entrepreneur view depend on. Every live response
+MUST satisfy the following contract on **both** nodes:
+
+* **`commercialProposal.summary: string`** and
+  **`termSheet.summary: string`** — **REQUIRED, non-empty**.
+  * Concise Dutch (NL-NL) paragraph that restates the proposed
+    facility (type, amount, rate / pricing caveat, tenor) plus the
+    headline conditions (collateral, covenants, conditions precedent,
+    events of default, fees, monitoring cadence) — i.e. the same
+    information the structured fields carry, condensed for narrative
+    use.
+  * Must NEVER be `null`, `""`, whitespace, or filler text such as
+    `"Geen commercieel voorstel beschikbaar"`.
+* **`commercialProposal.collateralPackage`**,
+  **`commercialProposal.covenantPackage`**,
+  **`commercialProposal.conditionsPrecedent`**,
+  **`commercialProposal.eventsOfDefault`** — string arrays (each
+  entry must be a non-empty string when present). Same rules apply to
+  `termSheet`.
+* **`commercialProposal.fees`** and
+  **`commercialProposal.monitoringCadence`** — optional strings.
+
+The live adapter normalizes both summaries defensively
+(`normalizeCommercialProposalSummary` in
+`geenbank-kredietworkflow-financier-schema.ts`), **before** schema
+validation, with strict guardrails:
+
+| LLM `<node>.summary` | Other commercial-proposal fields | Normalized result |
+| --- | --- | --- |
+| non-empty string | any | unchanged (existing valid summary is never overwritten) |
+| missing / `null` / `""` / whitespace | `structure.facilityType` and/or `structure.amount` and/or `structure.rate` (or `rateComment`) and/or `structure.tenor` and/or `collateralPackage` / `covenantPackage` / `conditionsPrecedent` / `eventsOfDefault` / `fees` / `monitoringCadence` non-empty | derived Dutch summary built from those fields, e.g. `"Voorgestelde structuur: Annuïteitenlening, EUR 250000, tegen 6.9%, over 60 mnd. Zekerheden: …. Convenanten: …. Condities precedent: …. Events of default: …. Fees: …. Monitoring: …."` |
+| missing / empty | every supporting field also empty | **left empty** → validator still rejects → adapter falls back to deterministic mock with `fallbackReason="Skill-antwoord ongeldig: commercialProposal.summary is geen niet-lege string"` (or `termSheet.summary` for the term-sheet node) |
+
+The normalizer is applied to **both** `commercialProposal` and
+`termSheet` independently. It **never invents commercial content**: it
+only restates what the model already provided in the structured fields.
+It never overwrites an existing valid summary, and it never produces a
+generic placeholder sentence on its own.
+
+`commercialProposal.summary` and `termSheet.summary` have no effect on
+`entrepreneurReport.canSubmit` or on `GATE_THRESHOLDS` — those remain
+driven exclusively by completeness / correctness / viability scores
+and the central gate.
+
 ### Canonical credit-analysis framing (landed)
 
 This skill is now treated as the **canonical credit-analysis engine**

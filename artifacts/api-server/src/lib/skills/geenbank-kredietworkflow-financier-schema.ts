@@ -398,6 +398,118 @@ function normalizeRiskAnalysisSummary(parsed: { riskAnalysis?: unknown }): void 
 }
 
 /**
+ * Normalize the `summary` field on a single commercial-proposal-shaped
+ * node (`commercialProposal` and `termSheet` both share this shape via
+ * `validateCommercialProposal`).
+ *
+ * Behaviour (deliberately conservative — we never invent commercial
+ * content):
+ * - If `summary` is already a non-empty trimmed string → keep it
+ *   untouched. An existing valid summary is NEVER overwritten.
+ * - If `summary` is missing / null / empty / whitespace-only **and**
+ *   the model populated at least one supporting evidence field
+ *   (`structure.facilityType` / `structure.amount` / `structure.rate`
+ *   / `structure.rateComment` / `structure.tenor`,
+ *   `collateralPackage`, `covenantPackage`, `conditionsPrecedent`,
+ *   `eventsOfDefault`, `fees`, `monitoringCadence`) with non-empty
+ *   content → derive a concise Dutch (NL-NL) paragraph from those
+ *   fields and write it to `summary`.
+ * - If `summary` is missing / empty **and** there is no supporting
+ *   evidence → leave `summary` as-is so the validator still rejects
+ *   the payload and the adapter falls back to the deterministic mock
+ *   with a structured `fallbackReason`. We never produce a hollow
+ *   placeholder like "Geen commercieel voorstel beschikbaar".
+ *
+ * Only mutates `<node>.summary`; every other field is left untouched
+ * so the validator still enforces shape on them.
+ */
+function normalizeCommercialProposalSummary(node: unknown): void {
+  if (!isObject(node)) return;
+
+  const existing = node.summary;
+  if (typeof existing === "string" && existing.trim() !== "") return;
+
+  const structure = isObject(node.structure)
+    ? (node.structure as Record<string, unknown>)
+    : null;
+
+  const structureBits: string[] = [];
+  if (structure) {
+    if (typeof structure.facilityType === "string" && structure.facilityType.trim() !== "") {
+      structureBits.push(structure.facilityType.trim());
+    }
+    if (typeof structure.amount === "number" && Number.isFinite(structure.amount)) {
+      structureBits.push(`EUR ${structure.amount}`);
+    }
+    if (typeof structure.rate === "number" && Number.isFinite(structure.rate)) {
+      structureBits.push(`tegen ${structure.rate}%`);
+    } else if (
+      typeof structure.rateComment === "string" &&
+      structure.rateComment.trim() !== ""
+    ) {
+      structureBits.push(`tegen ${structure.rateComment.trim()}`);
+    }
+    if (typeof structure.tenor === "string" && structure.tenor.trim() !== "") {
+      structureBits.push(`over ${structure.tenor.trim()}`);
+    }
+  }
+
+  const collateralPackage = isStringArray(node.collateralPackage)
+    ? (node.collateralPackage as string[]).map((s) => s.trim()).filter((s) => s !== "")
+    : [];
+  const covenantPackage = isStringArray(node.covenantPackage)
+    ? (node.covenantPackage as string[]).map((s) => s.trim()).filter((s) => s !== "")
+    : [];
+  const conditionsPrecedent = isStringArray(node.conditionsPrecedent)
+    ? (node.conditionsPrecedent as string[]).map((s) => s.trim()).filter((s) => s !== "")
+    : [];
+  const eventsOfDefault = isStringArray(node.eventsOfDefault)
+    ? (node.eventsOfDefault as string[]).map((s) => s.trim()).filter((s) => s !== "")
+    : [];
+  const fees =
+    typeof node.fees === "string" && node.fees.trim() !== ""
+      ? node.fees.trim()
+      : null;
+  const monitoringCadence =
+    typeof node.monitoringCadence === "string" &&
+    node.monitoringCadence.trim() !== ""
+      ? node.monitoringCadence.trim()
+      : null;
+
+  const parts: string[] = [];
+  if (structureBits.length > 0) {
+    parts.push(`Voorgestelde structuur: ${structureBits.join(", ")}.`);
+  }
+  if (collateralPackage.length > 0) {
+    parts.push(`Zekerheden: ${collateralPackage.join("; ")}.`);
+  }
+  if (covenantPackage.length > 0) {
+    parts.push(`Convenanten: ${covenantPackage.join("; ")}.`);
+  }
+  if (conditionsPrecedent.length > 0) {
+    parts.push(`Condities precedent: ${conditionsPrecedent.join("; ")}.`);
+  }
+  if (eventsOfDefault.length > 0) {
+    parts.push(`Events of default: ${eventsOfDefault.join("; ")}.`);
+  }
+  if (fees) {
+    parts.push(`Fees: ${fees.endsWith(".") ? fees : fees + "."}`);
+  }
+  if (monitoringCadence) {
+    parts.push(
+      `Monitoring: ${monitoringCadence.endsWith(".") ? monitoringCadence : monitoringCadence + "."}`,
+    );
+  }
+
+  // No supporting evidence → leave summary as-is. Validation will
+  // still fail and the live adapter will fall back to mock with a
+  // structured fallbackReason. We refuse to invent content.
+  if (parts.length === 0) return;
+
+  node.summary = parts.join(" ");
+}
+
+/**
  * Optional deterministic context the orchestrator can hand to
  * `normalizeKredietworkflowFinancierPayload`. Used **only** as a
  * conservative backfill source — never to override valid
@@ -524,6 +636,9 @@ function normalizeRiskAnalysisMetrics(
  *   - `riskAnalysis.summary` (only when missing/empty AND evidence exists)
  *   - `riskAnalysis.metrics` (always normalized to the 4-key shape
  *     when `riskAnalysis` is an object)
+ *   - `commercialProposal.summary` (only when missing/empty AND
+ *     evidence exists — see `normalizeCommercialProposalSummary`)
+ *   - `termSheet.summary` (same rule, same normalizer)
  *
  * Does NOT touch any other field — the validator still rejects
  * genuinely malformed payloads (bad enum, missing arrays, etc.) and
@@ -549,6 +664,8 @@ export function normalizeKredietworkflowFinancierPayload(
   }
   normalizeRiskAnalysisSummary(parsed);
   normalizeRiskAnalysisMetrics(parsed, ctx);
+  normalizeCommercialProposalSummary(parsed.commercialProposal);
+  normalizeCommercialProposalSummary(parsed.termSheet);
   return parsed;
 }
 
