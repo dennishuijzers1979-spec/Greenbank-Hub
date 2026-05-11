@@ -212,12 +212,33 @@ function fallback(companyName: string): GeenbankKredietworkflowOutput {
  *
  * Crucially: this never reads `process.env`, never embeds secrets, and
  * never sends the raw OPENAI_API_KEY in the payload. */
-function buildSkillInput(args: GeenbankKredietworkflowInput) {
+/**
+ * Resolve the real borrower identity for a live credit-workflow call.
+ * Trims the prospect company name. Returns `null` when missing/empty.
+ *
+ * Intentionally does NOT fall back to the display placeholder
+ * (`ctx.companyName === "Onbekend"`): a live credit decision must be
+ * rendered against a real company, never against a sentinel string.
+ */
+function resolveBorrowerName(ctx: SkillContext): string | null {
+  const fromBorrower = ctx.borrowerName?.trim();
+  if (fromBorrower) return fromBorrower;
+  // Belt-and-braces: also try ctx.companyName when it's a real value
+  // (i.e. not the "Onbekend" placeholder), in case an older caller
+  // populated only the display field.
+  const fromCompany = ctx.companyName?.trim();
+  if (fromCompany && fromCompany !== "Onbekend") return fromCompany;
+  return null;
+}
+
+function buildSkillInput(args: GeenbankKredietworkflowInput, borrowerName: string) {
   const { ctx } = args;
-  const { dossier, documents, companyName } = ctx;
+  const { dossier, documents } = ctx;
   return {
     borrower: {
-      companyName,
+      // Field name matches the canonical financier-output schema
+      // (`borrower.name`) so the LLM can echo it back verbatim.
+      name: borrowerName,
       kvkNumber: null,
       description: dossier.companyDescription ?? null,
     },
@@ -254,6 +275,7 @@ function buildSkillInput(args: GeenbankKredietworkflowInput) {
 
 async function callOpenAISkill(
   args: GeenbankKredietworkflowInput,
+  borrowerName: string,
 ): Promise<{
   mapped: MappedKredietworkflowAppAnalysis;
   model: string;
@@ -268,7 +290,7 @@ async function callOpenAISkill(
     process.env.OPENAI_MODEL ??
     DEFAULT_OPENAI_MODEL;
   const systemPrompt = loadSkillMarkdown(SKILL_SLUG);
-  const userPayload = buildSkillInput(args);
+  const userPayload = buildSkillInput(args, borrowerName);
 
   const client = getOpenAIChatClient();
   const res = await client.chat(
@@ -358,8 +380,30 @@ export const GeenbankKredietworkflowAdapter = {
             };
           }
 
+          // Refuse to ask the LLM for a credit decision when the
+          // borrower identity is missing. Never substitute a fake
+          // name like "Onbekend" for a live credit workflow call.
+          const borrowerName = resolveBorrowerName(ctx);
+          if (!borrowerName) {
+            const reason =
+              "Bedrijfsidentiteit ontbreekt; live kredietworkflow niet uitgevoerd.";
+            logger.warn(
+              { skill: MODULE, dossierId: ctx.dossier.id },
+              "[skill] missing borrower identity — falling back to mock",
+            );
+            return {
+              data: mockOutput,
+              outputSummary: `openai-skipped → ${mockSummary}`,
+              ok: false,
+              error: reason,
+              usedMockMode: true,
+              fallbackReason: reason,
+              model: null,
+            };
+          }
+
           try {
-            const { mapped, model } = await callOpenAISkill(args);
+            const { mapped, model } = await callOpenAISkill(args, borrowerName);
             const liveOutput = buildLiveAppOutput(args, mapped);
             const liveSummary = `openai verdict=${liveOutput.verdict} confidence=${liveOutput.confidenceScore} canSubmit=${liveOutput.entrepreneurReport.canSubmit} canonical=preserved`;
             return {
