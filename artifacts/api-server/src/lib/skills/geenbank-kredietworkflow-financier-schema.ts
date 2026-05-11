@@ -666,7 +666,89 @@ export function normalizeKredietworkflowFinancierPayload(
   normalizeRiskAnalysisMetrics(parsed, ctx);
   normalizeCommercialProposalSummary(parsed.commercialProposal);
   normalizeCommercialProposalSummary(parsed.termSheet);
+  normalizeValidationFindings(parsed.validationFindings);
   return parsed;
+}
+
+/**
+ * Conservative array-coercion helper used by `normalizeValidationFindings`
+ * for `blockingFindings` / `advisoryFindings` / `consistencyIssues`.
+ *
+ * Accepts the safe live-output shapes that production OpenAI runs have
+ * been observed to emit and that are clearly equivalent to the
+ * declared `string[]` contract:
+ *
+ *   - `undefined` / missing key   → `[]`
+ *   - `null`                      → `[]`
+ *   - `""` / whitespace-only      → `[]`
+ *   - non-empty string            → `[trimmed]`
+ *   - `string[]`                  → trimmed + empty entries dropped
+ *   - `Array<string|object>` mix  → each entry handled independently:
+ *       * non-empty string → kept (trimmed)
+ *       * object with one of the recognized text fields
+ *         (`description`, `finding`, `summary`, `issue`, `message`,
+ *         `text`) carrying a non-empty string → that string
+ *       * anything else → dropped (we refuse to invent text)
+ *   - any other value (number, boolean, plain object, etc.) → `[]`
+ *
+ * Never invents new findings, never overwrites a valid string-array
+ * beyond trimming and dropping empty entries, and never converts an
+ * unintelligible object into placeholder text.
+ */
+function coerceFindingsArray(value: unknown): string[] {
+  if (value === undefined || value === null) return [];
+  if (typeof value === "string") {
+    const t = value.trim();
+    return t === "" ? [] : [t];
+  }
+  if (!Array.isArray(value)) return [];
+  const out: string[] = [];
+  const TEXT_KEYS = ["description", "finding", "summary", "issue", "message", "text"] as const;
+  for (const entry of value) {
+    if (typeof entry === "string") {
+      const t = entry.trim();
+      if (t !== "") out.push(t);
+      continue;
+    }
+    if (isObject(entry)) {
+      for (const k of TEXT_KEYS) {
+        const v = entry[k];
+        if (typeof v === "string" && v.trim() !== "") {
+          out.push(v.trim());
+          break;
+        }
+      }
+      // No recognized text field → silently drop. We refuse to
+      // fabricate finding text from arbitrary object shapes.
+      continue;
+    }
+    // numbers, booleans, nested arrays, null, etc. → drop
+  }
+  return out;
+}
+
+/**
+ * Normalize the three string-array fields on `validationFindings` in
+ * place: `blockingFindings`, `advisoryFindings`, `consistencyIssues`.
+ *
+ * Only touches those three fields — `summary`, `recalculatedMetrics`
+ * and any other field are left exactly as the model produced them so
+ * the validator can still reject genuinely malformed payloads (e.g.
+ * missing/empty `summary`).
+ *
+ * Accepts the conservative live-output shapes documented on
+ * `coerceFindingsArray`. Never invents finding text and never
+ * overwrites a valid existing `string[]` beyond trimming + dropping
+ * empty entries. No-op when `value` is not an object — the validator
+ * will reject that on its own.
+ */
+function normalizeValidationFindings(value: unknown): void {
+  if (!isObject(value)) return;
+  value.blockingFindings = coerceFindingsArray(value.blockingFindings);
+  value.advisoryFindings = coerceFindingsArray(value.advisoryFindings);
+  if (value.consistencyIssues !== undefined) {
+    value.consistencyIssues = coerceFindingsArray(value.consistencyIssues);
+  }
 }
 
 function validateRiskAnalysis(value: unknown): string | null {

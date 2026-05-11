@@ -2807,6 +2807,258 @@ test("kredietworkflow adapter: live OpenAI returning empty commercialProposal.su
   }
 });
 
+// --- validationFindings array normalization ------------------------------
+//
+// These tests exercise the pure validation-findings normalizer used by
+// the live kredietworkflow adapter BEFORE schema validation. They never
+// call real OpenAI. They guard against the production failure mode
+// "validationFindings.blockingFindings geen string-array" without ever
+// inventing finding text.
+
+test("normalizeKredietworkflowFinancierPayload: valid validationFindings arrays pass through (trimmed)", () => {
+  const sample = buildFinancierSample();
+  sample.validationFindings.blockingFindings = ["  Geen externe accountantsverklaring  "];
+  sample.validationFindings.advisoryFindings = ["Verifieer doorlopende klantcontracten jaarlijks."];
+  normalizeKredietworkflowFinancierPayload(sample);
+  assert.deepEqual(sample.validationFindings.blockingFindings, [
+    "Geen externe accountantsverklaring",
+  ]);
+  assert.deepEqual(sample.validationFindings.advisoryFindings, [
+    "Verifieer doorlopende klantcontracten jaarlijks.",
+  ]);
+  assert.equal(validateGeenbankKredietworkflowFinancierJson(sample), null);
+});
+
+test("normalizeKredietworkflowFinancierPayload: missing blockingFindings becomes []", () => {
+  const sample = buildFinancierSample();
+  delete (sample.validationFindings as unknown as { blockingFindings?: unknown }).blockingFindings;
+  normalizeKredietworkflowFinancierPayload(sample);
+  assert.deepEqual(sample.validationFindings.blockingFindings, []);
+  assert.equal(validateGeenbankKredietworkflowFinancierJson(sample), null);
+});
+
+test("normalizeKredietworkflowFinancierPayload: blockingFindings=null becomes []", () => {
+  const sample = buildFinancierSample();
+  (sample.validationFindings as unknown as { blockingFindings: unknown }).blockingFindings = null;
+  normalizeKredietworkflowFinancierPayload(sample);
+  assert.deepEqual(sample.validationFindings.blockingFindings, []);
+  assert.equal(validateGeenbankKredietworkflowFinancierJson(sample), null);
+});
+
+test("normalizeKredietworkflowFinancierPayload: blockingFindings=string becomes [string]", () => {
+  const sample = buildFinancierSample();
+  (sample.validationFindings as unknown as { blockingFindings: unknown }).blockingFindings =
+    "Geen externe accountantsverklaring beschikbaar";
+  normalizeKredietworkflowFinancierPayload(sample);
+  assert.deepEqual(sample.validationFindings.blockingFindings, [
+    "Geen externe accountantsverklaring beschikbaar",
+  ]);
+  assert.equal(validateGeenbankKredietworkflowFinancierJson(sample), null);
+});
+
+test("normalizeKredietworkflowFinancierPayload: blockingFindings=empty/whitespace string becomes []", () => {
+  const sample = buildFinancierSample();
+  (sample.validationFindings as unknown as { blockingFindings: unknown }).blockingFindings =
+    "   ";
+  normalizeKredietworkflowFinancierPayload(sample);
+  assert.deepEqual(sample.validationFindings.blockingFindings, []);
+  assert.equal(validateGeenbankKredietworkflowFinancierJson(sample), null);
+});
+
+test("normalizeKredietworkflowFinancierPayload: blockingFindings array with empty/whitespace entries is filtered", () => {
+  const sample = buildFinancierSample();
+  (sample.validationFindings as unknown as { blockingFindings: unknown }).blockingFindings = [
+    "Punt A",
+    "",
+    "   ",
+    "Punt B",
+  ];
+  normalizeKredietworkflowFinancierPayload(sample);
+  assert.deepEqual(sample.validationFindings.blockingFindings, ["Punt A", "Punt B"]);
+  assert.equal(validateGeenbankKredietworkflowFinancierJson(sample), null);
+});
+
+test("normalizeKredietworkflowFinancierPayload: blockingFindings array with objects carrying description/finding is converted to string-array", () => {
+  const sample = buildFinancierSample();
+  (sample.validationFindings as unknown as { blockingFindings: unknown }).blockingFindings = [
+    { description: "Externe accountantsverklaring ontbreekt" },
+    { finding: "DSCR < 1.2 in stressscenario" },
+    { summary: "Aflossingscapaciteit niet onderbouwd" },
+    { issue: "Borgstelling DGA niet bekrachtigd" },
+    { message: "Pandakte voorraden ontbreekt" },
+    { text: "Klantenconcentratie > 40%" },
+    "Reeds gestructureerde tekst",
+  ];
+  normalizeKredietworkflowFinancierPayload(sample);
+  assert.deepEqual(sample.validationFindings.blockingFindings, [
+    "Externe accountantsverklaring ontbreekt",
+    "DSCR < 1.2 in stressscenario",
+    "Aflossingscapaciteit niet onderbouwd",
+    "Borgstelling DGA niet bekrachtigd",
+    "Pandakte voorraden ontbreekt",
+    "Klantenconcentratie > 40%",
+    "Reeds gestructureerde tekst",
+  ]);
+  assert.equal(validateGeenbankKredietworkflowFinancierJson(sample), null);
+});
+
+test("normalizeKredietworkflowFinancierPayload: objects without recognized text field are dropped, never invented", () => {
+  const sample = buildFinancierSample();
+  (sample.validationFindings as unknown as { blockingFindings: unknown }).blockingFindings = [
+    { severity: "high", code: "DSCR_LOW" },
+    { foo: "bar", baz: 42 },
+    { description: "" },
+    { description: "   " },
+    "Echte bevinding",
+    123,
+    true,
+    null,
+  ];
+  normalizeKredietworkflowFinancierPayload(sample);
+  // Only the one real string entry survives. No placeholder text is invented.
+  assert.deepEqual(sample.validationFindings.blockingFindings, ["Echte bevinding"]);
+  assert.equal(validateGeenbankKredietworkflowFinancierJson(sample), null);
+});
+
+test("normalizeKredietworkflowFinancierPayload: advisoryFindings follows the same coercion pattern", () => {
+  const sample = buildFinancierSample();
+  (sample.validationFindings as unknown as { advisoryFindings: unknown }).advisoryFindings = [
+    { description: "Verifieer klantcontracten jaarlijks" },
+    "Monitor DSCR per kwartaal",
+    "",
+    null,
+  ];
+  normalizeKredietworkflowFinancierPayload(sample);
+  assert.deepEqual(sample.validationFindings.advisoryFindings, [
+    "Verifieer klantcontracten jaarlijks",
+    "Monitor DSCR per kwartaal",
+  ]);
+  assert.equal(validateGeenbankKredietworkflowFinancierJson(sample), null);
+});
+
+test("normalizeKredietworkflowFinancierPayload: consistencyIssues follows the same coercion pattern when present", () => {
+  const sample = buildFinancierSample();
+  (sample.validationFindings as unknown as { consistencyIssues: unknown }).consistencyIssues = [
+    { issue: "Omzet term sheet wijkt af van risico-memo" },
+    "Tenor in commercieel voorstel ≠ tenor in term sheet",
+    { foo: "bar" },
+  ];
+  normalizeKredietworkflowFinancierPayload(sample);
+  assert.deepEqual(sample.validationFindings.consistencyIssues, [
+    "Omzet term sheet wijkt af van risico-memo",
+    "Tenor in commercieel voorstel ≠ tenor in term sheet",
+  ]);
+  assert.equal(validateGeenbankKredietworkflowFinancierJson(sample), null);
+});
+
+test("normalizeKredietworkflowFinancierPayload: unrelated invalid fields still fail validation after validationFindings normalization", () => {
+  const sample = buildFinancierSample();
+  (sample.validationFindings as unknown as { blockingFindings: unknown }).blockingFindings = null;
+  // Unrelated regression: missing required validationFindings.summary must still be rejected.
+  (sample.validationFindings as unknown as { summary: unknown }).summary = "";
+  normalizeKredietworkflowFinancierPayload(sample);
+  // Arrays were normalized…
+  assert.deepEqual(sample.validationFindings.blockingFindings, []);
+  // …but the unrelated bad field still fails validation.
+  const problem = validateGeenbankKredietworkflowFinancierJson(sample);
+  assert.ok(
+    problem && /validationFindings\.summary/i.test(problem),
+    `expected summary error, got ${problem}`,
+  );
+});
+
+test("kredietworkflow adapter: live OpenAI returning non-array validationFindings.blockingFindings is normalized + accepted (no fallback)", async () => {
+  const { dossierId } = await createDossier();
+  const [dossier] = await db
+    .select()
+    .from(dossiersTable)
+    .where(inArray(dossiersTable.id, [dossierId]));
+  // Reproduce the exact production failure: the model returned
+  // blockingFindings as an array of objects with description fields,
+  // and advisoryFindings as a single string.
+  const liveResponse = buildFinancierSample();
+  (liveResponse.validationFindings as unknown as { blockingFindings: unknown }).blockingFindings =
+    [
+      { description: "Externe accountantsverklaring ontbreekt" },
+      { finding: "DSCR-stress < 1.0" },
+    ];
+  (liveResponse.validationFindings as unknown as { advisoryFindings: unknown }).advisoryFindings =
+    "Monitor DSCR per kwartaal";
+  setOpenAIChatClientForTesting(
+    makeFakeOpenAI(() => ({
+      content: JSON.stringify(liveResponse),
+      model: "gpt-4o-mini",
+    })),
+  );
+  try {
+    await withKwEnv(
+      { [KW_PROVIDER_ENV]: "openai", OPENAI_API_KEY: "sk-test-fake-1234567890" },
+      async () => {
+        const r = await GeenbankKredietworkflowAdapter.run(buildKwArgs(dossier));
+        assert.equal(
+          r.ok,
+          true,
+          `expected live success, got fallbackReason=${r.invocation.fallbackReason}`,
+        );
+        assert.equal(r.usedMockMode, false);
+        assert.equal(r.invocation.fallbackReason, null);
+        const extras = r.invocation.extras as
+          | { canonical?: GeenbankKredietworkflowFinancierOutput }
+          | null;
+        assert.ok(extras?.canonical, "extras.canonical must be populated on live success");
+        assert.deepEqual(extras!.canonical!.validationFindings.blockingFindings, [
+          "Externe accountantsverklaring ontbreekt",
+          "DSCR-stress < 1.0",
+        ]);
+        assert.deepEqual(extras!.canonical!.validationFindings.advisoryFindings, [
+          "Monitor DSCR per kwartaal",
+        ]);
+      },
+    );
+  } finally {
+    setOpenAIChatClientForTesting(null);
+  }
+});
+
+test("kredietworkflow adapter: live OpenAI with truly unusable validationFindings (missing summary) still falls back to mock cleanly", async () => {
+  const { dossierId } = await createDossier();
+  const [dossier] = await db
+    .select()
+    .from(dossiersTable)
+    .where(inArray(dossiersTable.id, [dossierId]));
+  const liveResponse = buildFinancierSample();
+  // Even with array-shape problems the normalizer will accept the
+  // findings; to exercise the *fallback* path on validationFindings
+  // we make the required summary unusable.
+  (liveResponse.validationFindings as unknown as { blockingFindings: unknown }).blockingFindings =
+    [{ severity: "high" }, { foo: "bar" }]; // → [] after normalization (no text)
+  (liveResponse.validationFindings as unknown as { summary: unknown }).summary = "";
+  setOpenAIChatClientForTesting(
+    makeFakeOpenAI(() => ({
+      content: JSON.stringify(liveResponse),
+      model: "gpt-4o-mini",
+    })),
+  );
+  try {
+    await withKwEnv(
+      { [KW_PROVIDER_ENV]: "openai", OPENAI_API_KEY: "sk-test-fake-1234567890" },
+      async () => {
+        const r = await GeenbankKredietworkflowAdapter.run(buildKwArgs(dossier));
+        assert.equal(r.usedMockMode, true);
+        assert.equal(r.invocation.provider, "openai");
+        assert.ok(
+          r.invocation.fallbackReason &&
+            /validationFindings\.summary/i.test(r.invocation.fallbackReason),
+          `unexpected fallbackReason: ${r.invocation.fallbackReason}`,
+        );
+        assert.ok(r.data.verdict);
+      },
+    );
+  } finally {
+    setOpenAIChatClientForTesting(null);
+  }
+});
+
 test("validateGeenbankKredietworkflowFinancierJson rejects rateComment of wrong type", () => {
   const sample = buildFinancierSample();
   (sample.requestedStructure as unknown as { rateComment: unknown }).rateComment =

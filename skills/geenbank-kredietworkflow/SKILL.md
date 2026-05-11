@@ -597,6 +597,55 @@ generic placeholder sentence on its own.
 driven exclusively by completeness / correctness / viability scores
 and the central gate.
 
+#### Validation-findings arrays (always string-arrays, never objects)
+
+The `validationFindings` block carries three list-shaped fields that
+**must** be string-arrays in the canonical financier output:
+
+* **`validationFindings.blockingFindings: string[]`** — required.
+  Use `[]` when there are no blocking findings; never `null`, never a
+  bare string, never an array of objects, never a nested structure.
+  Each entry is one short Dutch sentence describing a single
+  showstopper for the casus.
+* **`validationFindings.advisoryFindings: string[]`** — required.
+  Same rule: `[]` when there are none. Each entry is one short Dutch
+  sentence describing an advisory (non-blocking) point that the loan
+  officer should be aware of.
+* **`validationFindings.consistencyIssues?: string[]`** — optional but
+  if present **must** be a string-array (use `[]` when none). Same
+  rule: no objects, no nulls, no bare strings.
+
+`validationFindings.summary` remains required and must be a non-empty
+Dutch string. It is **not** normalized — produce a real one-sentence
+review of the case.
+
+The live adapter normalizes the three array fields defensively before
+schema validation (`normalizeValidationFindings` /
+`coerceFindingsArray`):
+
+| LLM `<arrayField>` | Normalized result |
+| --- | --- |
+| missing key / `undefined` / `null` | `[]` |
+| `""` / whitespace-only string | `[]` |
+| non-empty string `"X"` | `["X"]` |
+| `string[]` | trimmed; empty entries dropped |
+| `Array<string \| object>` mix | per-entry: non-empty string kept (trimmed); object with one of the recognized text fields (`description`, `finding`, `summary`, `issue`, `message`, `text`) carrying a non-empty string → that string; everything else dropped |
+| any other shape (number, boolean, plain object, …) | `[]` |
+
+The normalizer **never invents finding text**: an object without a
+recognized text field is silently dropped rather than coerced into
+placeholder text. It never overwrites a valid existing `string[]`
+beyond trimming + dropping empty entries. It does not touch
+`validationFindings.summary` or `validationFindings.recalculatedMetrics`,
+so missing/empty `summary` still triggers the validator and the
+adapter falls back to the deterministic mock with a structured
+`fallbackReason`.
+
+`validationFindings.blockingFindings` / `.advisoryFindings` /
+`.consistencyIssues` have no effect on `entrepreneurReport.canSubmit`
+or on `GATE_THRESHOLDS` — those remain driven exclusively by
+completeness / correctness / viability scores and the central gate.
+
 ### Canonical credit-analysis framing (landed)
 
 This skill is now treated as the **canonical credit-analysis engine**
