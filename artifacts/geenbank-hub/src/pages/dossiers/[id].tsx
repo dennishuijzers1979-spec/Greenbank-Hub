@@ -9,6 +9,7 @@ import {
   useListPartners, getListPartnersQueryKey,
   useSubmitDossierToPartners,
   useGetLatestRun, getGetLatestRunQueryKey,
+  useGetDualViewAdvice, getGetDualViewAdviceQueryKey,
 } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
@@ -70,6 +71,7 @@ export default function DossierDetail() {
   const { data: dossier, isLoading } = useGetDossier(id, { query: { queryKey: getGetDossierQueryKey(id), enabled: !!id } });
   const { data: report } = useGetFinancierReport(id, { query: { queryKey: getGetFinancierReportQueryKey(id), enabled: !!id } });
   const { data: latestRun } = useGetLatestRun(id, { query: { queryKey: getGetLatestRunQueryKey(id), enabled: !!id, retry: false } });
+  const { data: dualAdvice } = useGetDualViewAdvice(id, { query: { queryKey: getGetDualViewAdviceQueryKey(id), enabled: !!id, retry: false } });
   const { data: documents } = useListDossierDocuments(id, { query: { queryKey: getListDossierDocumentsQueryKey(id), enabled: !!id } });
   const { data: memo } = useGetMemorandum(id, { query: { queryKey: getGetMemorandumQueryKey(id), enabled: !!id, retry: false } });
   const { data: partners } = useListPartners({ query: { queryKey: getListPartnersQueryKey() } });
@@ -257,6 +259,201 @@ export default function DossierDetail() {
           ) : (
             <Card><CardContent className="py-10 text-center text-muted-foreground">Geen AI rapport beschikbaar voor dit dossier.</CardContent></Card>
           )}
+
+          {dualAdvice && (() => {
+            const pv = dualAdvice.partnerView;
+            const ind = pv.indicative_structure;
+            const modeLabel =
+              dualAdvice.executionMode === "live_openai"
+                ? "Live OpenAI"
+                : dualAdvice.executionMode === "fallback_mock"
+                  ? "Fallback naar mock"
+                  : "Deterministisch / mock";
+            const modeBadge =
+              dualAdvice.executionMode === "live_openai"
+                ? "bg-green-100 text-green-800"
+                : dualAdvice.executionMode === "fallback_mock"
+                  ? "bg-amber-100 text-amber-800"
+                  : "bg-slate-100 text-slate-700";
+            const statusLabel =
+              pv.recommendation_status === "strong"
+                ? "Sterk"
+                : pv.recommendation_status === "provisional"
+                  ? "Voorlopig"
+                  : pv.recommendation_status === "weak"
+                    ? "Zwak"
+                    : "Onbekend";
+            const statusBadge =
+              pv.recommendation_status === "strong"
+                ? "bg-green-100 text-green-800"
+                : pv.recommendation_status === "provisional"
+                  ? "bg-amber-100 text-amber-800"
+                  : pv.recommendation_status === "weak"
+                    ? "bg-red-100 text-red-800"
+                    : "bg-slate-100 text-slate-700";
+            return (
+              <Card data-testid="dual-view-advice">
+                <CardHeader>
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div>
+                      <CardTitle className="flex items-center gap-2 text-base">
+                        <Building2 className="w-4 h-4" /> Financier productadvies (intern)
+                      </CardTitle>
+                      <CardDescription>
+                        Interne productuitkomst van <span className="font-mono">FinancingProductAdvisorDualView</span>.
+                        Niet zichtbaar voor de prospect — alleen voor loan officers en admins.
+                      </CardDescription>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className={`text-xs px-2 py-0.5 rounded ${modeBadge}`}>{modeLabel}</span>
+                      <span className={`text-xs px-2 py-0.5 rounded ${statusBadge}`}>Status: {statusLabel}</span>
+                      {dualAdvice.partial && (
+                        <span className="text-xs px-2 py-0.5 rounded bg-amber-100 text-amber-800">Onvolledig</span>
+                      )}
+                    </div>
+                  </div>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  {dualAdvice.warnings.length > 0 && (
+                    <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800 space-y-1">
+                      {dualAdvice.warnings.map((w, i) => (
+                        <div key={i} className="flex gap-2"><AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" /><span>{w}</span></div>
+                      ))}
+                    </div>
+                  )}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="border rounded-lg p-3 bg-muted/10">
+                      <h4 className="text-xs uppercase tracking-wide text-muted-foreground mb-1">Aanbevolen product</h4>
+                      <p className="text-sm font-medium">{pv.recommended_product || "—"}</p>
+                      {pv.recommended_product_mix && pv.recommended_product_mix.length > 0 && (
+                        <p className="text-xs text-muted-foreground mt-1">
+                          Mix: {pv.recommended_product_mix.join(" + ")}
+                        </p>
+                      )}
+                    </div>
+                    <div className="border rounded-lg p-3 bg-muted/10">
+                      <h4 className="text-xs uppercase tracking-wide text-muted-foreground mb-1">Alternatief</h4>
+                      <p className="text-sm font-medium">{pv.alternative_product || "—"}</p>
+                    </div>
+                  </div>
+
+                  {ind && (ind.amount !== null || ind.tenor_months !== null || ind.repayment_logic || ind.collateral_logic || (ind.conditions && ind.conditions.length > 0)) && (
+                    <div className="border rounded-lg p-3">
+                      <h4 className="text-sm font-semibold mb-2">Indicatieve structuur</h4>
+                      <dl className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-1 text-xs">
+                        {ind.amount !== null && ind.amount !== undefined && (
+                          <><dt className="text-muted-foreground">Bedrag</dt><dd>€ {ind.amount.toLocaleString("nl-NL")}</dd></>
+                        )}
+                        {ind.tenor_months !== null && ind.tenor_months !== undefined && (
+                          <><dt className="text-muted-foreground">Looptijd</dt><dd>{ind.tenor_months} maanden</dd></>
+                        )}
+                        {ind.repayment_logic && (<><dt className="text-muted-foreground">Aflossing</dt><dd>{ind.repayment_logic}</dd></>)}
+                        {ind.collateral_logic && (<><dt className="text-muted-foreground">Zekerheden</dt><dd>{ind.collateral_logic}</dd></>)}
+                      </dl>
+                      {ind.conditions && ind.conditions.length > 0 && (
+                        <div className="mt-2">
+                          <h5 className="text-xs uppercase tracking-wide text-muted-foreground mb-1">Voorwaarden</h5>
+                          <ul className="text-xs space-y-1">
+                            {ind.conditions.map((c, i) => (
+                              <li key={i} className="flex gap-2"><span className="text-muted-foreground">•</span><span>{c}</span></li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                    {pv.rationale && pv.rationale.length > 0 && (
+                      <div className="border rounded-lg p-3 border-green-200 bg-green-50/30">
+                        <h5 className="text-xs uppercase tracking-wide text-green-800 mb-1">Onderbouwing</h5>
+                        <ul className="text-xs space-y-1">
+                          {pv.rationale.map((r, i) => <li key={i} className="flex gap-2"><span className="text-green-600">•</span><span>{r}</span></li>)}
+                        </ul>
+                      </div>
+                    )}
+                    {pv.key_risks && pv.key_risks.length > 0 && (
+                      <div className="border rounded-lg p-3 border-red-200 bg-red-50/30">
+                        <h5 className="text-xs uppercase tracking-wide text-red-800 mb-1">Risico's</h5>
+                        <ul className="text-xs space-y-1">
+                          {pv.key_risks.map((r, i) => <li key={i} className="flex gap-2"><span className="text-red-600">•</span><span>{r}</span></li>)}
+                        </ul>
+                      </div>
+                    )}
+                    {pv.evidence_gaps && pv.evidence_gaps.length > 0 && (
+                      <div className="border rounded-lg p-3 border-amber-200 bg-amber-50/30">
+                        <h5 className="text-xs uppercase tracking-wide text-amber-800 mb-1">Bewijs-gaten</h5>
+                        <ul className="text-xs space-y-1">
+                          {pv.evidence_gaps.map((r, i) => <li key={i} className="flex gap-2"><span className="text-amber-700">•</span><span>{r}</span></li>)}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+
+                  {pv.shortlisted_products && pv.shortlisted_products.length > 0 && (
+                    <div className="border rounded-lg p-3">
+                      <h4 className="text-sm font-semibold mb-2">Shortlist</h4>
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-xs">
+                          <thead>
+                            <tr className="text-left text-muted-foreground border-b">
+                              <th className="py-1 pr-2">Product</th>
+                              <th className="py-1 pr-2">Fit</th>
+                              <th className="py-1 pr-2">Bewijs</th>
+                              <th className="py-1 pr-2">Structuur</th>
+                              <th className="py-1">Notities</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {pv.shortlisted_products.map((sp, i) => (
+                              <tr key={i} className="border-b last:border-b-0 align-top">
+                                <td className="py-1 pr-2 font-medium">{sp.product_name}</td>
+                                <td className="py-1 pr-2">{sp.product_fit_score ?? "—"}</td>
+                                <td className="py-1 pr-2">{sp.evidence_strength_score ?? "—"}</td>
+                                <td className="py-1 pr-2">{sp.structurability_score ?? "—"}</td>
+                                <td className="py-1">
+                                  {sp.notes && sp.notes.length > 0 ? sp.notes.join("; ") : "—"}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+
+                  <dl className="grid grid-cols-2 md:grid-cols-4 gap-x-6 gap-y-1 text-xs pt-2 border-t">
+                    <dt className="text-muted-foreground">Bron</dt>
+                    <dd className="font-mono">{dualAdvice.provider}</dd>
+                    {dualAdvice.model && (
+                      <>
+                        <dt className="text-muted-foreground">Model</dt>
+                        <dd className="font-mono truncate">{dualAdvice.model}</dd>
+                      </>
+                    )}
+                    {dualAdvice.generatedAt && (
+                      <>
+                        <dt className="text-muted-foreground">Gegenereerd</dt>
+                        <dd>{format(new Date(dualAdvice.generatedAt), "d MMM yyyy HH:mm", { locale: nl })}</dd>
+                      </>
+                    )}
+                    {dualAdvice.durationMs !== null && dualAdvice.durationMs !== undefined && (
+                      <>
+                        <dt className="text-muted-foreground">Duur</dt>
+                        <dd>{dualAdvice.durationMs} ms</dd>
+                      </>
+                    )}
+                    {dualAdvice.fallbackReason && (
+                      <>
+                        <dt className="text-muted-foreground">Fallback</dt>
+                        <dd className="text-amber-700 col-span-3 md:col-span-3">{dualAdvice.fallbackReason}</dd>
+                      </>
+                    )}
+                  </dl>
+                </CardContent>
+              </Card>
+            );
+          })()}
 
           {latestRun && latestRun.skillInvocations && latestRun.skillInvocations.length > 0 && (
             <Card>

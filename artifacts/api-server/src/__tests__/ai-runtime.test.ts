@@ -629,3 +629,333 @@ test("runPrevalidation persists skillInvocations and officer can read them", asy
   assert.ok(!/sk-[A-Za-z0-9]/.test(serialized), "openai key leaked");
   assert.ok(!/OPENAI_API_KEY=\S/.test(serialized), "raw env leaked");
 });
+
+// --- Dual-view advice extractor + officer endpoint --------------------------
+
+import { extractDualViewAdvice } from "../lib/skills/dual-view-advice";
+
+function makeDualRun(opts: {
+  id?: string;
+  invocations: Array<Record<string, unknown>>;
+  completedAt?: Date;
+}): {
+  id: string;
+  startedAt: Date;
+  completedAt: Date;
+  skillInvocations: Array<Record<string, unknown>>;
+} {
+  const now = opts.completedAt ?? new Date();
+  return {
+    id: opts.id ?? randomUUID(),
+    startedAt: now,
+    completedAt: now,
+    skillInvocations: opts.invocations,
+  };
+}
+
+const SAMPLE_PARTNER_VIEW = {
+  recommended_product: "Kortlopende werkkapitaalfaciliteit",
+  alternative_product: "Achtergestelde lening",
+  recommended_product_mix: ["Werkkapitaal", "Borgstelling MKB"],
+  recommendation_status: "strong",
+  rationale: ["Marge boven 15%", "DSCR > 1.5"],
+  key_risks: ["Concentratie afnemers"],
+  evidence_gaps: ["Tussentijdse cijfers ontbreken"],
+  indicative_structure: {
+    amount: 200000,
+    tenor_months: 60,
+    repayment_logic: "annuïteit",
+    collateral_logic: "borgstelling",
+    conditions: ["Persoonlijke borg DGA"],
+  },
+  shortlisted_products: [
+    {
+      product_name: "Werkkapitaal",
+      product_fit_score: 8,
+      evidence_strength_score: 7,
+      structurability_score: 8,
+      notes: ["Snelle doorlooptijd"],
+    },
+  ],
+};
+
+const SAMPLE_ENTREPRENEUR_VIEW = {
+  summary: "Sterke casus, klaar voor indienen.",
+  financeability_score: 8,
+  submission_readiness_score: 7,
+  cta_status: "ready_to_submit",
+};
+
+test("extractDualViewAdvice maps a live OpenAI invocation onto a typed payload", () => {
+  const run = makeDualRun({
+    invocations: [
+      {
+        skillName: "FinancingProductAdvisorDualView",
+        provider: "openai",
+        usedMockMode: false,
+        model: "gpt-4o-mini",
+        durationMs: 1234,
+        fallbackReason: null,
+        startedAt: new Date().toISOString(),
+        completedAt: new Date().toISOString(),
+        extras: {
+          response: {
+            partner_view: SAMPLE_PARTNER_VIEW,
+            entrepreneur_view: SAMPLE_ENTREPRENEUR_VIEW,
+          },
+        },
+      },
+    ],
+  });
+  const advice = extractDualViewAdvice("dossier-x", run);
+  assert.ok(advice, "expected advice to be extracted");
+  assert.equal(advice!.dossierId, "dossier-x");
+  assert.equal(advice!.executionMode, "live_openai");
+  assert.equal(advice!.provider, "openai");
+  assert.equal(advice!.model, "gpt-4o-mini");
+  assert.equal(advice!.partial, false);
+  assert.equal(
+    advice!.partnerView.recommended_product,
+    "Kortlopende werkkapitaalfaciliteit",
+  );
+  assert.equal(advice!.partnerView.recommendation_status, "strong");
+  assert.equal(advice!.partnerView.indicative_structure?.amount, 200000);
+  assert.equal(advice!.partnerView.shortlisted_products?.length, 1);
+  assert.equal(advice!.entrepreneurSummary?.cta_status, "ready_to_submit");
+});
+
+test("extractDualViewAdvice flags deterministic mock with a Dutch warning", () => {
+  const run = makeDualRun({
+    invocations: [
+      {
+        skillName: "FinancingProductAdvisorDualView",
+        provider: "mock",
+        usedMockMode: true,
+        model: null,
+        durationMs: 5,
+        fallbackReason: null,
+        extras: { response: { partner_view: SAMPLE_PARTNER_VIEW } },
+      },
+    ],
+  });
+  const advice = extractDualViewAdvice("d1", run);
+  assert.ok(advice);
+  assert.equal(advice!.executionMode, "deterministic_mock");
+  assert.equal(advice!.model, null);
+  assert.ok(
+    advice!.warnings.some((w) => /mock/i.test(w)),
+    "expected a mock warning",
+  );
+});
+
+test("extractDualViewAdvice classifies fallback_mock when the live attempt failed", () => {
+  const run = makeDualRun({
+    invocations: [
+      {
+        skillName: "FinancingProductAdvisorDualView",
+        provider: "openai",
+        usedMockMode: true,
+        model: null,
+        durationMs: 12,
+        fallbackReason: "OpenAI gaf ongeldige JSON",
+        extras: { response: { partner_view: SAMPLE_PARTNER_VIEW } },
+      },
+    ],
+  });
+  const advice = extractDualViewAdvice("d2", run);
+  assert.ok(advice);
+  assert.equal(advice!.executionMode, "fallback_mock");
+  assert.equal(advice!.fallbackReason, "OpenAI gaf ongeldige JSON");
+});
+
+test("extractDualViewAdvice returns null when the dual-view invocation is missing", () => {
+  const run = makeDualRun({
+    invocations: [
+      { skillName: "CreditProductAdvisor", provider: "mock", usedMockMode: true },
+    ],
+  });
+  assert.equal(extractDualViewAdvice("d3", run), null);
+});
+
+test("extractDualViewAdvice marks runs without extras.response as partial", () => {
+  const run = makeDualRun({
+    invocations: [
+      {
+        skillName: "FinancingProductAdvisorDualView",
+        provider: "mock",
+        usedMockMode: true,
+        extras: null,
+      },
+    ],
+  });
+  const advice = extractDualViewAdvice("d4", run);
+  assert.ok(advice);
+  assert.equal(advice!.partial, true);
+  assert.ok(advice!.warnings.some((w) => /skill-antwoord/i.test(w)));
+});
+
+test("extractDualViewAdvice scrubs strings that look like API keys or bearer tokens", () => {
+  const secret = "sk-test-secretvalue-shouldnotleak-7777777777";
+  const run = makeDualRun({
+    invocations: [
+      {
+        skillName: "FinancingProductAdvisorDualView",
+        provider: "openai",
+        usedMockMode: false,
+        model: `model-${secret}`,
+        fallbackReason: `Bearer ${secret}`,
+        extras: {
+          response: {
+            partner_view: {
+              ...SAMPLE_PARTNER_VIEW,
+              recommended_product: secret,
+              rationale: [`leaked ${secret}`, "Marge ok"],
+            },
+          },
+        },
+      },
+    ],
+  });
+  const advice = extractDualViewAdvice("d5", run);
+  assert.ok(advice);
+  const serialized = JSON.stringify(advice);
+  assert.ok(!serialized.includes(secret), "raw secret leaked through extractor");
+  assert.equal(advice!.model, null);
+  assert.equal(advice!.fallbackReason, null);
+  assert.equal(advice!.partnerView.recommended_product, null);
+  assert.deepEqual(advice!.partnerView.rationale, ["Marge ok"]);
+});
+
+test("GET /dossiers/:id/dual-view-advice returns typed advice for officers", async () => {
+  const { dossierId } = await createDossier("submitted_to_geenbank");
+  const completedAt = new Date();
+  await db.insert(aiAnalysisRunsTable).values({
+    dossierId,
+    runType: "prevalidation",
+    status: "completed",
+    startedAt: completedAt,
+    completedAt,
+    usedMockMode: false,
+    skillInvocations: [
+      {
+        skillName: "FinancingProductAdvisorDualView",
+        provider: "openai",
+        usedMockMode: false,
+        model: "gpt-4o-mini",
+        durationMs: 999,
+        fallbackReason: null,
+        startedAt: completedAt.toISOString(),
+        completedAt: completedAt.toISOString(),
+        extras: {
+          response: {
+            partner_view: SAMPLE_PARTNER_VIEW,
+            entrepreneur_view: SAMPLE_ENTREPRENEUR_VIEW,
+          },
+        },
+      },
+    ],
+  });
+  const officer = await createUser("loan_officer");
+  const res = await fetch(`${baseUrl}/dossiers/${dossierId}/dual-view-advice`, {
+    headers: { Cookie: `geenbank_session=${officer.sessionToken}` },
+  });
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as {
+    executionMode: string;
+    partnerView: { recommended_product: string; recommendation_status: string };
+    entrepreneurSummary: { cta_status: string } | null;
+  };
+  assert.equal(body.executionMode, "live_openai");
+  assert.equal(
+    body.partnerView.recommended_product,
+    "Kortlopende werkkapitaalfaciliteit",
+  );
+  assert.equal(body.partnerView.recommendation_status, "strong");
+  assert.equal(body.entrepreneurSummary?.cta_status, "ready_to_submit");
+});
+
+test("GET /dossiers/:id/dual-view-advice returns 404 when no run exists", async () => {
+  const { dossierId } = await createDossier("submitted_to_geenbank");
+  const officer = await createUser("loan_officer");
+  const res = await fetch(`${baseUrl}/dossiers/${dossierId}/dual-view-advice`, {
+    headers: { Cookie: `geenbank_session=${officer.sessionToken}` },
+  });
+  assert.equal(res.status, 404);
+});
+
+test("GET /dossiers/:id/dual-view-advice returns 404 when extras.response is missing dual view", async () => {
+  const { dossierId } = await createDossier("submitted_to_geenbank");
+  const completedAt = new Date();
+  await db.insert(aiAnalysisRunsTable).values({
+    dossierId,
+    runType: "prevalidation",
+    status: "completed",
+    startedAt: completedAt,
+    completedAt,
+    usedMockMode: true,
+    skillInvocations: [
+      {
+        skillName: "CreditProductAdvisor",
+        provider: "mock",
+        usedMockMode: true,
+        durationMs: 4,
+      },
+    ],
+  });
+  const officer = await createUser("loan_officer");
+  const res = await fetch(`${baseUrl}/dossiers/${dossierId}/dual-view-advice`, {
+    headers: { Cookie: `geenbank_session=${officer.sessionToken}` },
+  });
+  assert.equal(res.status, 404);
+});
+
+test("GET /dossiers/:id/dual-view-advice rejects prospects (RBAC)", async () => {
+  const { dossierId } = await createDossier("submitted_to_geenbank");
+  const prospect = await createUser("prospect");
+  const res = await fetch(`${baseUrl}/dossiers/${dossierId}/dual-view-advice`, {
+    headers: { Cookie: `geenbank_session=${prospect.sessionToken}` },
+  });
+  assert.ok(
+    res.status === 401 || res.status === 403,
+    `expected 401 or 403, got ${res.status}`,
+  );
+});
+
+test("GET /dossiers/:id/dual-view-advice does not leak secrets in the response", async () => {
+  const { dossierId } = await createDossier("submitted_to_geenbank");
+  const secret = "sk-test-leak-9999999999";
+  const completedAt = new Date();
+  await db.insert(aiAnalysisRunsTable).values({
+    dossierId,
+    runType: "prevalidation",
+    status: "completed",
+    startedAt: completedAt,
+    completedAt,
+    usedMockMode: false,
+    skillInvocations: [
+      {
+        skillName: "FinancingProductAdvisorDualView",
+        provider: "openai",
+        usedMockMode: false,
+        model: `model-${secret}`,
+        durationMs: 1,
+        fallbackReason: `Bearer ${secret}`,
+        extras: {
+          response: {
+            partner_view: {
+              ...SAMPLE_PARTNER_VIEW,
+              rationale: [`leaked ${secret}`],
+            },
+          },
+        },
+      },
+    ],
+  });
+  const officer = await createUser("loan_officer");
+  const res = await fetch(`${baseUrl}/dossiers/${dossierId}/dual-view-advice`, {
+    headers: { Cookie: `geenbank_session=${officer.sessionToken}` },
+  });
+  assert.equal(res.status, 200);
+  const text = await res.text();
+  assert.ok(!text.includes(secret), "raw secret leaked through endpoint");
+});

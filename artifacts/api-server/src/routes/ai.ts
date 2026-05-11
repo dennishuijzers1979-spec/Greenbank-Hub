@@ -10,9 +10,11 @@ import {
   ListDossierRunsParams,
   GetLatestRunParams,
   GetFinancierReportParams,
+  GetDualViewAdviceParams,
   GenerateMemorandumParams,
   GetMemorandumParams,
 } from "@workspace/api-zod";
+import { extractDualViewAdvice } from "../lib/skills/dual-view-advice";
 import { requireAuth } from "../lib/auth";
 import { logActivity } from "../lib/activity";
 import { serializeRun } from "../lib/serializers";
@@ -262,6 +264,35 @@ router.get(
       viabilityScore: run.viabilityScore,
       confidenceScore: run.confidenceScore,
     });
+  },
+);
+
+router.get(
+  "/dossiers/:dossierId/dual-view-advice",
+  requireAuth(["loan_officer", "admin"]),
+  async (req, res): Promise<void> => {
+    const params = GetDualViewAdviceParams.safeParse(req.params);
+    if (!params.success) {
+      res.status(400).json({ error: params.error.message });
+      return;
+    }
+    if (!(await officerCanAccessDossier(params.data.dossierId))) {
+      res.status(404).json({ error: "Dossier niet gevonden" });
+      return;
+    }
+    const run = await loadDossierForOfficer(params.data.dossierId);
+    if (!run) {
+      res.status(404).json({ error: "Geen analyse-run gevonden" });
+      return;
+    }
+    const advice = extractDualViewAdvice(params.data.dossierId, run);
+    if (!advice) {
+      res
+        .status(404)
+        .json({ error: "Geen FinancingProductAdvisorDualView-uitvoer gevonden" });
+      return;
+    }
+    res.json(advice);
   },
 );
 

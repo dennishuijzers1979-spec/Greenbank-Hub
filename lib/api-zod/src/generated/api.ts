@@ -766,6 +766,74 @@ export const GetFinancierReportResponse = zod.object({
 });
 
 /**
+ * @summary Get internal FinancingProductAdvisorDualView product advice (loan officers/admins only)
+ */
+export const GetDualViewAdviceParams = zod.object({
+  dossierId: zod.coerce.string(),
+});
+
+export const GetDualViewAdviceResponse = zod.object({
+  dossierId: zod.string(),
+  runId: zod.string().nullish(),
+  provider: zod.string(),
+  executionMode: zod.enum([
+    "live_openai",
+    "deterministic_mock",
+    "fallback_mock",
+  ]),
+  model: zod.string().nullish(),
+  generatedAt: zod.string().nullish(),
+  durationMs: zod.number().nullish(),
+  fallbackReason: zod.string().nullish(),
+  partnerView: zod.object({
+    recommended_product: zod.string().nullish(),
+    alternative_product: zod.string().nullish(),
+    recommended_product_mix: zod.array(zod.string()).optional(),
+    recommendation_status: zod
+      .union([
+        zod.literal("strong"),
+        zod.literal("provisional"),
+        zod.literal("weak"),
+        zod.literal(null),
+      ])
+      .nullish(),
+    rationale: zod.array(zod.string()).optional(),
+    key_risks: zod.array(zod.string()).optional(),
+    evidence_gaps: zod.array(zod.string()).optional(),
+    indicative_structure: zod
+      .object({
+        amount: zod.number().nullish(),
+        tenor_months: zod.number().nullish(),
+        repayment_logic: zod.string().nullish(),
+        collateral_logic: zod.string().nullish(),
+        conditions: zod.array(zod.string()).optional(),
+      })
+      .nullish(),
+    shortlisted_products: zod
+      .array(
+        zod.object({
+          product_name: zod.string(),
+          product_fit_score: zod.number().nullish(),
+          evidence_strength_score: zod.number().nullish(),
+          structurability_score: zod.number().nullish(),
+          notes: zod.array(zod.string()).optional(),
+        }),
+      )
+      .optional(),
+  }),
+  entrepreneurSummary: zod
+    .object({
+      summary: zod.string().nullish(),
+      financeability_score: zod.number().nullish(),
+      submission_readiness_score: zod.number().nullish(),
+      cta_status: zod.string().nullish(),
+    })
+    .nullish(),
+  partial: zod.boolean(),
+  warnings: zod.array(zod.string()),
+});
+
+/**
  * @summary Generate credit memorandum
  */
 export const GenerateMemorandumParams = zod.object({

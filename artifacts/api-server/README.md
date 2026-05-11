@@ -303,3 +303,44 @@ which feeds the central gate. To keep the gate stable:
 * The full live skill response (when valid) is preserved on
   `SkillInvocation.extras` for the *AI uitvoeringsdetails* panel and
   for use by the financier-facing report later.
+
+### Internal product advice — `GET /dossiers/:id/dual-view-advice`
+
+Loan officers and admins can request a typed extract of the latest
+`FinancingProductAdvisorDualView` invocation:
+
+```
+GET /api/dossiers/:dossierId/dual-view-advice    # loan_officer | admin
+```
+
+The response is the `DualViewAdvice` schema in
+`lib/api-spec/openapi.yaml` (regenerated into `@workspace/api-zod` and
+`@workspace/api-client-react`). Key fields:
+
+* `executionMode` — `live_openai`, `deterministic_mock`, or
+  `fallback_mock` (live attempted, fell back to mock — see
+  `fallbackReason`).
+* `partnerView` — recommended product, alternative, mix, status,
+  rationale, key risks, evidence gaps, indicative structure, and a
+  shortlist with fit / evidence / structurability scores.
+* `entrepreneurSummary` — minimal summary fields (financeability,
+  submission readiness, CTA status). The entrepreneur-facing detail
+  view is still owned by the prospect dossier surface.
+* `partial` + `warnings[]` — Dutch warnings for empty partner views,
+  missing indicative structure, or mock-mode usage.
+
+The endpoint never exposes prompts, request bodies, API keys, or
+authorization headers. The extractor in
+`src/lib/skills/dual-view-advice.ts` only copies a fixed allow-list of
+fields out of `SkillInvocation.extras.response`, and any string that
+still matches an `sk-…` or `Bearer …` pattern is dropped — covered by
+`extractDualViewAdvice scrubs strings that look like API keys` and
+`GET /dossiers/:id/dual-view-advice does not leak secrets in the response`
+in the test suite.
+
+The Geenbank Hub dossier review surface
+(`artifacts/geenbank-hub/src/pages/dossiers/[id].tsx`) calls this
+endpoint via the generated `useGetDualViewAdvice` hook and renders the
+result as the *Financier productadvies (intern)* card on the AI
+analyse tab — visible to loan officers and admins only, hidden from
+the prospect dossier UI.
