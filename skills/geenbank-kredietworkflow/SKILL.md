@@ -274,14 +274,18 @@ Before finalizing, verify all of the following:
 
 ---
 
-## Repo integration notes (forward-only — adapter still on mock)
+## Repo integration notes (live-capable, env-gated)
 
 These notes document how this skill pack maps onto the Geenbank Hub
-adapter today. Importing this pack does **not** enable live OpenAI
-invocation. The deterministic mock in
+adapter. The adapter is **live-capable** behind a per-skill opt-in
+(`AI_SKILL_GEENBANKKREDIETWORKFLOW_PROVIDER=openai` plus
+`OPENAI_API_KEY`); see *Live OpenAI pilot (env-gated, landed)* further
+down. Without the opt-in env, the deterministic mock in
 `artifacts/api-server/src/lib/skills/geenbank-kredietworkflow.ts`
-remains the source of `GeenbankKredietworkflowOutput` for the dossier
-gate and for the *AI uitvoeringsdetails* panel.
+remains the source of `GeenbankKredietworkflowOutput`. In **both**
+modes the central gate (`GATE_THRESHOLDS`) is the binding source of
+truth for `canSubmit`, and the *AI uitvoeringsdetails* panel reflects
+the actual provider/model/fallback state.
 
 ### Adapter binding
 
@@ -452,14 +456,19 @@ artefacts ship alongside this SKILL.md:
   `artifacts/api-server/src/lib/skills/types.ts` now carries an
   optional `creditWorkflowEnrichment: PipelineCreditWorkflowEnrichment | null`
   slot — the chain hand-off documented under the *Mismatch* section
-  above. Today it is `null` (adapter still on mock); the live wiring
-  populates it from the canonical output.
+  above. Today it is still `null` from the orchestrator step (the
+  adapter persists the canonical output on `SkillInvocation.extras`
+  instead); the next-step pipeline wiring will populate this slot from
+  the canonical output so chained skills can consume it without
+  re-parsing.
 
-These are schema + mapper + types + tests + docs only. The adapter
-(`geenbank-kredietworkflow.ts`) still runs the deterministic mock,
-the central gate (`GATE_THRESHOLDS`) still drives `canSubmit`,
-`validateGeenbankKredietworkflowJson` still validates the mock
-output, and no live OpenAI call is enabled.
+The schema + mapper + types + tests + docs are forward-only and the
+entrepreneur-facing validator (`validateGeenbankKredietworkflowJson`)
+still validates the mock-shape output. The adapter itself is now
+**live-capable** when its per-skill env opt-in is present (see *Live
+OpenAI pilot* above). Without the opt-in it runs the deterministic
+mock; in either mode the central gate (`GATE_THRESHOLDS`) drives the
+final `canSubmit`.
 
 ### Forward-only steps to wire live invocation (NOT executed today)
 

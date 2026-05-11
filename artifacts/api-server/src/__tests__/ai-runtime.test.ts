@@ -1677,6 +1677,44 @@ test("kredietworkflow adapter falls back to mock when OpenAI returns invalid JSO
   }
 });
 
+test("kredietworkflow adapter falls back to mock when OpenAI client throws (network/HTTP error)", async () => {
+  const { dossierId } = await createDossier();
+  const [dossier] = await db
+    .select()
+    .from(dossiersTable)
+    .where(inArray(dossiersTable.id, [dossierId]));
+  setOpenAIChatClientForTesting(
+    makeFakeOpenAI(() => {
+      throw new Error("HTTP 503 Service Unavailable");
+    }),
+  );
+  try {
+    await withKwEnv(
+      { [KW_PROVIDER_ENV]: "openai", OPENAI_API_KEY: "sk-test-fake-1234567890" },
+      async () => {
+        const r = await GeenbankKredietworkflowAdapter.run(
+          buildKwArgs(dossier),
+        );
+        assert.equal(r.usedMockMode, true);
+        assert.equal(r.invocation.usedMockMode, true);
+        assert.equal(r.invocation.provider, "openai");
+        assert.ok(
+          r.invocation.fallbackReason &&
+            /503|Service Unavailable|mislukt/i.test(
+              r.invocation.fallbackReason,
+            ),
+          `unexpected fallbackReason: ${r.invocation.fallbackReason}`,
+        );
+        // Deterministic mock still produces a valid answer.
+        assert.ok(r.data.verdict);
+        assert.ok(r.data.entrepreneurReport);
+      },
+    );
+  } finally {
+    setOpenAIChatClientForTesting(null);
+  }
+});
+
 test("kredietworkflow adapter falls back to mock when OpenAI returns invalid schema", async () => {
   const { dossierId } = await createDossier();
   const [dossier] = await db

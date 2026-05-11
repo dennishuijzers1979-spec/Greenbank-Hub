@@ -6,10 +6,17 @@ maintains. It exists so that we can move from deterministic mock-mode to
 genuine LLM-backed skills **without** rewriting the runtime, leaking
 secrets, or losing observability.
 
-> **Status today:** all five adapters run in deterministic *mock mode*.
-> Provider negotiation, fallback, and per-skill instrumentation are
-> implemented (see `artifacts/api-server/src/lib/skills/runtime.ts`),
-> but no callable LLM interface is wired yet.
+> **Status today:** two adapters are **live-capable** behind per-skill
+> opt-in env vars — `FinancingProductAdvisorDualView` and
+> `GeenbankKredietworkflow`. The remaining three
+> (`FinancingNeedAssessor`, `CreditProductAdvisor`,
+> `MoneycareKredietmemorandum`) still run deterministic mock-mode and
+> have no live wiring yet. Provider negotiation, fallback, per-skill
+> instrumentation, and the OpenAI Chat client live in
+> `artifacts/api-server/src/lib/skills/runtime.ts` +
+> `openai-client.ts`. Setting `OPENAI_API_KEY` alone never auto-promotes
+> any adapter — each live skill requires its own
+> `AI_SKILL_<MODULE>_PROVIDER=openai` opt-in (the *honesty rule*).
 
 ## Conventions
 
@@ -17,9 +24,14 @@ secrets, or losing observability.
   the orchestrator already consumes
   (`artifacts/api-server/src/lib/skills/types.ts`). The real provider
   must be adapted *into* that shape, never the other way around.
-* The runtime resolver decides per skill whether to call the real
-  provider or fall back to mock — adapters never read env vars
-  directly.
+* The runtime resolver (`resolveSkillRuntime`) decides per skill whether
+  the requested provider is reachable (e.g. OpenAI requires
+  `OPENAI_API_KEY`) and otherwise downgrades to mock with a
+  `fallbackReason`. Live-capable adapters additionally consult their
+  own `AI_SKILL_<MODULE>_PROVIDER` env var to decide whether to attempt
+  the live call at all (the *honesty rule* — `OPENAI_API_KEY` alone
+  never auto-promotes any adapter). Mock-only adapters do not read env
+  vars themselves.
 * No secret may live in the repo. Secrets are managed exclusively
   through Replit Secrets / `process.env`.
 * Every real call must remain server-side. The browser must never
