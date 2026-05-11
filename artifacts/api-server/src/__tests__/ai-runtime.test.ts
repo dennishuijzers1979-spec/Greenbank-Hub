@@ -3219,6 +3219,172 @@ test("normalizeKredietworkflowFinancierPayload: existing normalizers still coope
   assert.equal(validateGeenbankKredietworkflowFinancierJson(sample), null);
 });
 
+// --- creditReport.sections[*].body normalization -------------------------
+//
+// Tests for the conservative section-body coercion that runs BEFORE
+// schema validation. They guard against the production failure mode
+// "creditReport.sections[*].body is geen string" without ever inventing
+// committee content. They never call real OpenAI.
+
+test("normalizeKredietworkflowFinancierPayload: valid string section body passes through trimmed (other sections untouched)", () => {
+  const sample = buildFinancierSample();
+  sample.creditReport.sections = [
+    { title: "Inleiding", body: "  Casus voldoet aan acceptatiecriteria.  " },
+    { title: "Conclusie", body: "Voorstel ter besluitvorming." },
+  ];
+  normalizeKredietworkflowFinancierPayload(sample);
+  assert.equal(sample.creditReport.sections[0].body, "Casus voldoet aan acceptatiecriteria.");
+  assert.equal(sample.creditReport.sections[1].body, "Voorstel ter besluitvorming.");
+  assert.equal(validateGeenbankKredietworkflowFinancierJson(sample), null);
+});
+
+test("normalizeKredietworkflowFinancierPayload: array-of-strings section body is joined", () => {
+  const sample = buildFinancierSample();
+  (sample.creditReport.sections[0] as unknown as { body: unknown }).body = [
+    "Eerste alinea over kasstroom.",
+    "  ",
+    "Tweede alinea over solvabiliteit.",
+  ];
+  normalizeKredietworkflowFinancierPayload(sample);
+  assert.equal(
+    sample.creditReport.sections[0].body,
+    "Eerste alinea over kasstroom.\n\nTweede alinea over solvabiliteit.",
+  );
+  assert.equal(validateGeenbankKredietworkflowFinancierJson(sample), null);
+});
+
+test("normalizeKredietworkflowFinancierPayload: object body with text/summary/content fields is coerced", () => {
+  for (const key of ["body", "text", "summary", "content", "description", "analysis"]) {
+    const sample = buildFinancierSample();
+    (sample.creditReport.sections[0] as unknown as { body: unknown }).body = {
+      [key]: "  Gestructureerde tekst uit object.  ",
+    };
+    normalizeKredietworkflowFinancierPayload(sample);
+    assert.equal(
+      sample.creditReport.sections[0].body,
+      "Gestructureerde tekst uit object.",
+      `key=${key} did not coerce`,
+    );
+    assert.equal(validateGeenbankKredietworkflowFinancierJson(sample), null);
+  }
+});
+
+test("normalizeKredietworkflowFinancierPayload: array of {text:...} objects is flattened", () => {
+  const sample = buildFinancierSample();
+  (sample.creditReport.sections[0] as unknown as { body: unknown }).body = [
+    { text: "Punt 1." },
+    { text: "Punt 2." },
+    { content: "Punt 3." },
+  ];
+  normalizeKredietworkflowFinancierPayload(sample);
+  assert.equal(
+    sample.creditReport.sections[0].body,
+    "Punt 1.\n\nPunt 2.\n\nPunt 3.",
+  );
+  assert.equal(validateGeenbankKredietworkflowFinancierJson(sample), null);
+});
+
+test("normalizeKredietworkflowFinancierPayload: section title is trimmed but kept", () => {
+  const sample = buildFinancierSample();
+  sample.creditReport.sections = [{ title: "  Inleiding  ", body: "Inhoud." }];
+  normalizeKredietworkflowFinancierPayload(sample);
+  assert.equal(sample.creditReport.sections[0].title, "Inleiding");
+  assert.equal(validateGeenbankKredietworkflowFinancierJson(sample), null);
+});
+
+test("normalizeKredietworkflowFinancierPayload: unrecognised body shape (number) is left untouched and validator still rejects", () => {
+  const sample = buildFinancierSample();
+  (sample.creditReport.sections[0] as unknown as { body: unknown }).body = 42;
+  normalizeKredietworkflowFinancierPayload(sample);
+  // Body must remain non-string so validator rejects — we never invent.
+  assert.equal(typeof sample.creditReport.sections[0].body, "number");
+  const problem = validateGeenbankKredietworkflowFinancierJson(sample);
+  assert.ok(
+    problem && /sections.*body/i.test(problem),
+    `expected sections[*].body validator error, got ${problem}`,
+  );
+});
+
+test("normalizeKredietworkflowFinancierPayload: object body without recognised text fields stays invalid (no invention)", () => {
+  const sample = buildFinancierSample();
+  (sample.creditReport.sections[0] as unknown as { body: unknown }).body = {
+    score: 7,
+    risk: "low",
+  };
+  normalizeKredietworkflowFinancierPayload(sample);
+  assert.equal(typeof sample.creditReport.sections[0].body, "object");
+  const problem = validateGeenbankKredietworkflowFinancierJson(sample);
+  assert.ok(
+    problem && /sections.*body/i.test(problem),
+    `expected sections[*].body validator error, got ${problem}`,
+  );
+});
+
+test("normalizeKredietworkflowFinancierPayload: empty section title still rejected after body normalization (no invention)", () => {
+  const sample = buildFinancierSample();
+  sample.creditReport.sections = [
+    { title: "", body: "Geldige inhoud uit het model." },
+  ];
+  normalizeKredietworkflowFinancierPayload(sample);
+  // Body trimmed, but empty title must still fail validation.
+  assert.equal(sample.creditReport.sections[0].body, "Geldige inhoud uit het model.");
+  const problem = validateGeenbankKredietworkflowFinancierJson(sample);
+  assert.ok(
+    problem && /sections.*title/i.test(problem),
+    `expected sections[*].title validator error, got ${problem}`,
+  );
+});
+
+test("kredietworkflow adapter: live OpenAI returning {body:{text:...}} sections is normalized + accepted (no fallback)", async () => {
+  const { dossierId } = await createDossier();
+  const [dossier] = await db
+    .select()
+    .from(dossiersTable)
+    .where(inArray(dossiersTable.id, [dossierId]));
+  const liveResponse = buildFinancierSample();
+  // Reproduce the production failure mode for sections[*].body: the
+  // model returned {text:"..."} objects instead of strings.
+  liveResponse.creditReport.sections = [
+    { title: "Inleiding", body: { text: "Casus voldoet aan acceptatiecriteria." } },
+    { title: "Risico", body: ["Klantconcentratie top-3 = 55%.", "Bij stress DSCR > 1,1."] },
+  ] as unknown as typeof liveResponse.creditReport.sections;
+  setOpenAIChatClientForTesting(
+    makeFakeOpenAI(() => ({
+      content: JSON.stringify(liveResponse),
+      model: "gpt-4o-mini",
+    })),
+  );
+  try {
+    await withKwEnv(
+      { [KW_PROVIDER_ENV]: "openai", OPENAI_API_KEY: "sk-test-fake-1234567890" },
+      async () => {
+        const r = await GeenbankKredietworkflowAdapter.run(buildKwArgs(dossier));
+        assert.equal(
+          r.ok,
+          true,
+          `expected live success, got fallbackReason=${r.invocation.fallbackReason}`,
+        );
+        assert.equal(r.usedMockMode, false);
+        assert.equal(r.invocation.fallbackReason, null);
+        const extras = r.invocation.extras as
+          | { canonical?: GeenbankKredietworkflowFinancierOutput }
+          | null;
+        assert.ok(extras?.canonical, "extras.canonical must be populated on live success");
+        assert.equal(
+          extras!.canonical!.creditReport.sections[0].body,
+          "Casus voldoet aan acceptatiecriteria.",
+        );
+        assert.equal(
+          extras!.canonical!.creditReport.sections[1].body,
+          "Klantconcentratie top-3 = 55%.\n\nBij stress DSCR > 1,1.",
+        );
+      },
+    );
+  } finally {
+    setOpenAIChatClientForTesting(null);
+  }
+});
+
 test("kredietworkflow adapter: live OpenAI returning empty creditReport.headline is normalized + accepted (no fallback)", async () => {
   const { dossierId } = await createDossier();
   const [dossier] = await db

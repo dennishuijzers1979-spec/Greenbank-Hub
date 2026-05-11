@@ -686,6 +686,33 @@ the deterministic mock with a structured `fallbackReason`.
 or on `GATE_THRESHOLDS` — those remain driven exclusively by
 completeness / correctness / viability scores and the central gate.
 
+#### Credit-report sections (titles + bodies)
+
+`creditReport.sections` is the body of the committee memo. Each section
+is `{ title: string (non-empty), body: string }`. The live adapter
+normalizes section content defensively
+(`normalizeCreditReportSections`) before schema validation. It NEVER
+adds, removes, reorders, or invents sections — it only coerces the
+LLM's textual representations into the `{ title, body }` shape that the
+validator demands.
+
+| Field   | LLM shape | Normalized result |
+| --- | --- | --- |
+| `title` | non-empty string | trimmed (kept) |
+| `title` | empty string / non-string | left untouched → validator rejects |
+| `body`  | string | trimmed (kept; empty `""` is allowed by the validator) |
+| `body`  | `string[]` | trimmed non-empty entries joined with `"\n\n"` |
+| `body`  | `{ body \| text \| summary \| content \| description \| analysis }` | first non-empty matching string field, trimmed |
+| `body`  | `Array<{ text \| ... }>` | one level of recursion: each item is coerced via the same rules and joined with `"\n\n"` |
+| `body`  | anything else (number, deeply nested object, etc.) | left untouched → validator still rejects with `"creditReport.sections[*].body is geen string"` → live adapter falls back to deterministic mock with a structured `fallbackReason` |
+
+The normalizer never invents memo content, risico's, conclusies,
+voorwaarden of cijfers — it only restates text that the model already
+produced. It does not touch `creditReport.headline`,
+`creditReport.summary`, `creditReport.docxArtifactRef`, or any field
+outside `creditReport.sections`. Section ordering is preserved as the
+model emitted it.
+
 ### Canonical credit-analysis framing (landed)
 
 This skill is now treated as the **canonical credit-analysis engine**
