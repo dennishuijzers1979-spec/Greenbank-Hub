@@ -1,0 +1,135 @@
+Preserve remote baseline behavior from commit 9966aff7b22fd29501721c8bb0c9df6bce4473cf.
+
+Important repo state:
+GitHub remote main is authoritative. Local Replit git state may be stale because prior agents could not fetch. Before making changes, make sure your workspace is based on current GitHub main at 9966aff7b22fd29501721c8bb0c9df6bce4473cf. If you cannot safely sync to that commit, stop and report.
+
+Do not regress:
+- gate tests
+- typed 409 payloads
+- upload gating
+- AI analysis gating
+- submit gating
+- officer visibility
+- RBAC
+- document download permissions
+- Dutch UI language
+- server-side-only skill invocation
+- mock fallback behavior
+- AI skill invocation observability
+- honest execution labels
+- live OpenAI FinancingProductAdvisorDualView behavior
+- internal Financier productadvies card
+- login redirect fix
+- prepared GeenbankKredietworkflow schema/tests/docs
+
+Task: Import the real ChatGPT skill pack for GeenbankKredietworkflow.
+
+Context:
+GeenbankKredietworkflow has now been prepared in the repo with:
+- schema contract
+- tests
+- source mapping docs
+- SKILL.md placeholder/integration notes
+
+The actual ChatGPT skill pack still needs to be imported.
+
+Goal:
+Import the real GeenbankKredietworkflow skill instructions/resources into:
+
+skills/geenbank-kredietworkflow/
+
+Do not enable live OpenAI invocation yet.
+Do not change the adapter runtime behavior yet.
+Do not add env vars.
+Do not call OpenAI from GeenbankKredietworkflow yet.
+
+1. Ask for/provide the skill archive
+
+If needed, ask me to upload the GeenbankKredietworkflow skill archive.
+
+Expected archive contents may include:
+- geenbank-kredietworkflow/SKILL.md
+- geenbank-kredietworkflow/agents/openai.yaml
+- geenbank-kredietworkflow/references/*
+- any other safe non-secret skill resources
+
+2. Import files
+
+Copy the real skill files into:
+
+skills/geenbank-kredietworkflow/
+
+Replace placeholder instruction content with the real SKILL.md content, but preserve or append repo integration notes:
+- no secrets
+- expected adapter input
+- expected adapter output
+- Dutch NL-NL free text
+- stable machine enums
+- auditable JSON-compatible output
+- do not hallucinate missing data
+- separate blocking and non-blocking findings
+- produce creditWorkflowContext for downstream skills
+
+3. Secret scan
+
+Scan imported files for obvious secrets:
+- API keys
+- bearer tokens
+- passwords
+- private URLs if sensitive
+- assistant IDs if they should not be committed
+
+If any likely secret is found, stop and report. Do not commit.
+
+4. Mapping check
+
+Compare the imported SKILL.md output requirements with:
+
+artifacts/api-server/src/lib/skills/geenbank-kredietworkflow-schema.ts
+
+Update docs/ai-skill-source-mapping.md if needed so the mapping is explicit.
+
+If the real skill output differs from the prepared schema:
+- do not silently change the adapter
+- document the mismatch
+- update only the forward schema/docs/tests if safe
+- do not enable live runtime
+
+5. Update validation script
+
+Update scripts/check-skill-packs.mjs so it checks the imported GeenbankKredietworkflow pack for:
+- required files present
+- no obvious secrets
+- key output markers present
+- mapping markers present
+
+6. Tests
+
+Add/update tests if the imported skill changes expected output shape.
+Tests should not call OpenAI.
+
+Run:
+node scripts/check-skill-packs.mjs
+pnpm --filter @workspace/api-server run test
+pnpm run typecheck
+pnpm run build
+
+7. Commit and push
+
+Commit with:
+
+Geenbank Hub: import kredietworkflow skill pack
+
+Push safely to GitHub main.
+Do not force push.
+Do not rewrite history.
+
+8. Report back
+
+Report:
+- changed files
+- whether secrets were detected
+- test/typecheck/build output
+- how the imported skill output maps to the prepared schema
+- what remains mocked
+- exact next step to enable live OpenAI invocation for GeenbankKredietworkflow
