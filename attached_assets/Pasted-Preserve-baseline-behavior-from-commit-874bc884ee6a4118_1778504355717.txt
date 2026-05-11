@@ -1,0 +1,169 @@
+Preserve baseline behavior from commit 874bc884ee6a41181a35f66871439f7020f5fe8a.
+
+Context:
+The imported GeenbankKredietworkflow skill is not an entrepreneur-view generator. It is the primary credit workflow engine.
+
+Its intended internal flow is:
+1. risk analysis
+2. commercial proposal
+3. control/validation of outcomes
+4. credit report generation
+
+Applicant data and document ingestion happen inside the risk analysis stage.
+
+Correct interpretation:
+- GeenbankKredietworkflow should produce the canonical financier/credit view.
+- The entrepreneur view should be derived from the same credit workflow output, not independently invented.
+- FinancingProductAdvisorDualView should later receive enriched creditWorkflowContext from GeenbankKredietworkflow.
+- MoneycareKredietmemorandum should later consume the finalized credit workflow/report context.
+
+Task:
+Prepare the app architecture for GeenbankKredietworkflow as canonical credit analysis, without enabling live OpenAI yet.
+
+1. Add a financier-shape schema
+
+Create a new schema alongside the existing entrepreneur-facing validator.
+
+Do not replace the existing validateGeenbankKredietworkflowJson yet.
+
+Add something like:
+
+GeenbankKredietworkflowFinancierOutput
+
+It should model the imported skill’s real output shape, including:
+- decision: Go | Conditional Go | No Go
+- riskAnalysis
+- commercialProposal
+- validationFindings
+- creditReport
+- termSheet
+- conditions
+- riskFlags
+- securities/collateral
+- pricing or pricingIndication
+- confidence or confidenceScore
+- creditWorkflowContext
+
+Use typed/zod validation where consistent with the repo.
+
+2. Add a mapper from financier output to current app fields
+
+Create a pure mapping helper, for example:
+
+mapKredietworkflowFinancierOutputToAppAnalysis()
+
+It should derive:
+- aiVerdict: kansrijk | voorwaardelijk | uitdagend
+- confidenceScore
+- strongPoints
+- weakPoints
+- blockingConditions suggestions
+- nonBlockingConditions suggestions
+- entrepreneurReport:
+  - headline
+  - summary
+  - strongPoints
+  - weakPoints
+  - actionPoints
+  - likelyFinancierAsks
+  - canSubmit
+
+Mapping principle:
+- Go → kansrijk
+- Conditional Go → voorwaardelijk
+- No Go → uitdagend
+- severe blocking risk/failed validation → canSubmit false
+- missing evidence/conditions → actionPoints and conditions
+- all entrepreneur-facing copy must be Dutch NL-NL, practical, non-bank-jargon where possible
+
+3. Preserve canonical financier output
+
+Do not throw away the rich financier output.
+Design the future storage shape so the full financier output can be stored in SkillInvocation.extras or a dedicated structured analysis field.
+
+The mapper should create app-compatible fields, but the canonical output remains available for:
+- loan officer review
+- product advice enrichment
+- memorandum generation
+- auditability
+
+4. Define enriched context handoff
+
+Add/update PipelineContext types/docs so downstream skills can receive:
+- creditWorkflowContext
+- riskAnalysis summary
+- commercialProposal summary
+- validation findings
+- conditions
+- risk flags
+- securities/collateral
+- termSheet/pricing hints
+
+Document how FinancingProductAdvisorDualView should use this later as enrichment, not as sole authority.
+
+5. Tests
+
+Add tests for:
+- valid financier-shape sample passes schema
+- invalid decision enum fails
+- missing riskAnalysis or creditReport fails
+- Go maps to kansrijk and canSubmit true when no blocking conditions exist
+- Conditional Go maps to voorwaardelijk and actionPoints/conditions
+- No Go maps to uitdagend and canSubmit false
+- entrepreneur report is derived in Dutch from the same financier output
+- canonical financier output is preserved
+
+Do not call OpenAI.
+Do not change runtime behavior.
+Do not enable GeenbankKredietworkflow live.
+
+6. Documentation
+
+Update:
+- docs/ai-skill-source-mapping.md
+- skills/geenbank-kredietworkflow/SKILL.md repo notes
+- API server README if relevant
+
+Make clear:
+- GeenbankKredietworkflow is the canonical credit analysis skill
+- entrepreneur view is derived from its output
+- dual-view product advisor should later use creditWorkflowContext as enrichment
+- moneycare memorandum should consume the finalized credit workflow context
+
+7. Do not change current behavior
+
+Do not modify:
+- GeenbankKredietworkflowAdapter runtime behavior
+- live OpenAI env vars
+- central gate thresholds
+- submit gate
+- RBAC
+- current prospect/loan officer UI
+
+This is schema, mapper, tests, and documentation only.
+
+8. Run checks
+
+Run:
+pnpm --filter @workspace/api-server run test
+pnpm run typecheck
+pnpm run build
+node scripts/check-skill-packs.mjs
+
+9. Commit and push
+
+Commit with:
+
+Geenbank Hub: model kredietworkflow as canonical credit analysis
+
+10. Report back
+
+Report:
+- changed files
+- test/typecheck/build output
+- new financier-shape schema
+- mapper behavior
+- how entrepreneur view is derived
+- how canonical financier output is preserved
+- whether runtime behavior stayed unchanged
+- next step to safely enable live GeenbankKredietworkflow

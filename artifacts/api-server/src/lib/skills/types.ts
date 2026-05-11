@@ -176,13 +176,64 @@ export type PipelineCondition = {
   description: string;
 };
 
+/**
+ * Enriched hand-off slot produced by the GeenbankKredietworkflow skill
+ * (the canonical credit-analysis engine). Downstream skills
+ * (`FinancingProductAdvisorDualView`, `MoneycareKredietmemorandum`)
+ * consume this as **enrichment**, never as sole authority — the
+ * entrepreneur-facing report and the central gate
+ * (`GATE_THRESHOLDS`) remain the binding source of truth for
+ * `canSubmit`.
+ *
+ * The concrete shape is described by
+ * `GeenbankKredietworkflowCreditContext` in
+ * `geenbank-kredietworkflow-financier-schema.ts`. It is kept as
+ * `unknown` here on purpose — the type lives next to the validator so
+ * the orchestrator can adopt this without forcing every adapter to
+ * import every other adapter's types.
+ *
+ * Slot semantics:
+ * - `creditWorkflowContext`     — enums + summaries for chained skills
+ * - `riskAnalysisSummary`       — anna-risk stage narrative + metrics
+ * - `commercialProposalSummary` — indicative term sheet snapshot
+ * - `validationFindings`        — kevin-credit independent review
+ * - `conditions`                — blocking + advisory items
+ * - `riskFlags`                 — blocking + advisory red flags
+ * - `securities`                — collateral inventory
+ * - `termSheetPricingHints`     — pricing-matrix selection per product
+ */
+export type PipelineCreditWorkflowEnrichment = {
+  creditWorkflowContext: unknown;
+  riskAnalysisSummary: unknown;
+  commercialProposalSummary: unknown;
+  validationFindings: unknown;
+  conditions: unknown;
+  riskFlags: unknown;
+  securities: unknown;
+  termSheetPricingHints: unknown;
+};
+
 export type PipelineContext = {
   dossier: PipelineDossierSnapshot;
   documents: PipelineDocumentFinding[];
   derived: PipelineDerivedFinancials;
   conditions: PipelineCondition[];
-  /** Output of the GeenbankKredietworkflow skill (step 1). */
+  /**
+   * Output of the GeenbankKredietworkflow skill (step 1) — the
+   * **canonical** credit-analysis output. Today's deterministic mock
+   * fills this with the entrepreneur-facing
+   * `GeenbankKredietworkflowOutput`; the live wiring will replace it
+   * with `GeenbankKredietworkflowFinancierOutput` and run the entrepreneur
+   * report through `mapKredietworkflowFinancierOutputToAppAnalysis()`.
+   */
   workflow: unknown;
+  /**
+   * Optional enrichment payload extracted from `workflow` so chained
+   * skills do not need to re-parse the full credit-analysis output.
+   * `null` while the adapter is on mock — intentionally typed so
+   * downstream skills can opt in without runtime coupling.
+   */
+  creditWorkflowEnrichment: PipelineCreditWorkflowEnrichment | null;
   /** Output of the FinancingNeedAssessor skill (step 2a). */
   needAssessment: unknown;
   /** Output of the CreditProductAdvisor skill (step 2b, optional). */
