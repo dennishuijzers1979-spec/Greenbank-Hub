@@ -207,6 +207,50 @@ export function serializeRun(r: DbRun) {
   };
 }
 
+/**
+ * Internal financier-output keys that must never be exposed to prospects via
+ * the latest-run endpoint. The canonical credit-committee output of
+ * GeenbankKredietworkflow lives under `extras.canonical`; other internal
+ * financier fields (creditReport, recommendedStructure, commercialProposal,
+ * termSheet, pricingIndication) are stripped defensively in case they are
+ * ever surfaced at a different nesting level.
+ */
+const PROSPECT_STRIPPED_INVOCATION_FIELDS = [
+  "creditReport",
+  "recommendedStructure",
+  "commercialProposal",
+  "termSheet",
+  "pricingIndication",
+] as const;
+
+/**
+ * Serialize a run for a prospect: same envelope as serializeRun, but each
+ * skillInvocation has internal financier-output stripped (extras.canonical
+ * and known internal fields). Top-level run status/verdict is preserved so
+ * existing prospect UI flows keep working.
+ */
+export function serializeRunForProspect(r: DbRun) {
+  const base = serializeRun(r);
+  const sanitized = base.skillInvocations.map((inv) => {
+    const copy: Record<string, unknown> = { ...inv };
+    for (const key of PROSPECT_STRIPPED_INVOCATION_FIELDS) {
+      delete copy[key];
+    }
+    if (copy.extras && typeof copy.extras === "object") {
+      const extrasCopy: Record<string, unknown> = {
+        ...(copy.extras as Record<string, unknown>),
+      };
+      delete extrasCopy.canonical;
+      for (const key of PROSPECT_STRIPPED_INVOCATION_FIELDS) {
+        delete extrasCopy[key];
+      }
+      copy.extras = extrasCopy;
+    }
+    return copy;
+  });
+  return { ...base, skillInvocations: sanitized };
+}
+
 export function serializeCondition(c: DbCondition) {
   return {
     id: c.id,

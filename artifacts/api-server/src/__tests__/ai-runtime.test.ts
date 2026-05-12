@@ -4179,3 +4179,145 @@ test("kredietworkflow stays on json_object path when KW_USE_STRUCTURED_OUTPUTS i
     setOpenAIChatClientForTesting(null);
   }
 });
+
+// --- serializeRunForProspect: hide internal financier output from prospects --
+
+import {
+  serializeRun as serializeRunForProspectTest_serializeRun,
+  serializeRunForProspect,
+} from "../lib/serializers";
+
+function makeRunWithKw(): Parameters<typeof serializeRunForProspect>[0] {
+  const now = new Date();
+  return {
+    id: "run-1",
+    dossierId: "dossier-1",
+    runType: "full_analysis",
+    status: "completed",
+    startedAt: now,
+    completedAt: now,
+    skillModulesUsed: ["GeenbankKredietworkflow"],
+    skillInvocations: [
+      {
+        skillName: "GeenbankKredietworkflow",
+        provider: "openai",
+        usedMockMode: false,
+        fallbackReason: null,
+        model: "gpt-test",
+        endpoint: null,
+        assistantId: null,
+        startedAt: now.toISOString(),
+        completedAt: now.toISOString(),
+        durationMs: 100,
+        ok: true,
+        inputSummary: "x",
+        outputSummary: "y",
+        errorMessage: null,
+        extras: {
+          skill: "GeenbankKredietworkflow",
+          gateApplied: false,
+          canonical: { decision: "Conditional Go", creditReport: { headline: "h" } },
+        },
+        creditReport: { headline: "leaked at top" },
+        recommendedStructure: { facilityType: "x" },
+        commercialProposal: { summary: "y" },
+        termSheet: { summary: "z" },
+        pricingIndication: { components: [] },
+      },
+      {
+        skillName: "FinancingProductAdvisorDualView",
+        provider: "openai",
+        usedMockMode: false,
+        fallbackReason: null,
+        model: "gpt-test",
+        endpoint: null,
+        assistantId: null,
+        startedAt: now.toISOString(),
+        completedAt: now.toISOString(),
+        durationMs: 50,
+        ok: true,
+        inputSummary: "x",
+        outputSummary: "y",
+        errorMessage: null,
+        extras: { skill: "FinancingProductAdvisorDualView", response: { foo: "bar" } },
+      },
+    ],
+    completenessScore: 90,
+    correctnessScore: 90,
+    viabilityScore: 80,
+    confidenceScore: 72,
+    verdict: "voorwaardelijk",
+    verdictSummary: "ok",
+    usedMockMode: false,
+    errors: [],
+  } as unknown as Parameters<typeof serializeRunForProspect>[0];
+}
+
+test("serializeRun (officer) preserves canonical + internal financier fields", () => {
+  const out = serializeRunForProspectTest_serializeRun(makeRunWithKw());
+  const kw = out.skillInvocations.find(
+    (i) => (i as { skillName: string }).skillName === "GeenbankKredietworkflow",
+  ) as Record<string, unknown>;
+  const extras = kw.extras as Record<string, unknown>;
+  assert.ok(extras.canonical, "officer must keep extras.canonical");
+  assert.ok(kw.creditReport, "officer must keep top-level creditReport");
+  assert.ok(kw.commercialProposal, "officer must keep top-level commercialProposal");
+});
+
+test("serializeRunForProspect strips canonical and internal financier fields", () => {
+  const out = serializeRunForProspect(makeRunWithKw());
+  // Top-level run fields preserved.
+  assert.equal(out.verdict, "voorwaardelijk");
+  assert.equal(out.status, "completed");
+  // Each invocation: no canonical, no internal financier keys, anywhere.
+  for (const inv of out.skillInvocations) {
+    const r = inv as Record<string, unknown>;
+    assert.equal(r.creditReport, undefined);
+    assert.equal(r.recommendedStructure, undefined);
+    assert.equal(r.commercialProposal, undefined);
+    assert.equal(r.termSheet, undefined);
+    assert.equal(r.pricingIndication, undefined);
+    if (r.extras && typeof r.extras === "object") {
+      const ex = r.extras as Record<string, unknown>;
+      assert.equal(ex.canonical, undefined);
+      assert.equal(ex.creditReport, undefined);
+      assert.equal(ex.recommendedStructure, undefined);
+      assert.equal(ex.commercialProposal, undefined);
+      assert.equal(ex.termSheet, undefined);
+      assert.equal(ex.pricingIndication, undefined);
+    }
+  }
+  // Belt-and-braces: no JSON substring of these keys remains.
+  const json = JSON.stringify(out);
+  for (const k of [
+    "\"canonical\"",
+    "\"creditReport\"",
+    "\"recommendedStructure\"",
+    "\"commercialProposal\"",
+    "\"termSheet\"",
+    "\"pricingIndication\"",
+  ]) {
+    assert.ok(!json.includes(k), `prospect payload still contains key ${k}`);
+  }
+  // Other extras (e.g. DualView's response) and bookkeeping keys are kept.
+  const dual = out.skillInvocations.find(
+    (i) => (i as { skillName: string }).skillName === "FinancingProductAdvisorDualView",
+  ) as Record<string, unknown>;
+  const dualExtras = dual.extras as Record<string, unknown>;
+  assert.ok(dualExtras.response, "DualView's non-canonical extras must be preserved");
+  const kw = out.skillInvocations.find(
+    (i) => (i as { skillName: string }).skillName === "GeenbankKredietworkflow",
+  ) as Record<string, unknown>;
+  const kwExtras = kw.extras as Record<string, unknown>;
+  assert.equal(kwExtras.skill, "GeenbankKredietworkflow");
+  assert.equal(kwExtras.gateApplied, false);
+});
+
+test("serializeRunForProspect does not mutate the input run", () => {
+  const run = makeRunWithKw();
+  serializeRunForProspect(run);
+  const kw = (run.skillInvocations as Array<Record<string, unknown>>)[0];
+  const extras = kw.extras as Record<string, unknown>;
+  assert.ok(extras.canonical, "input run must remain untouched");
+  assert.ok(kw.creditReport, "input run top-level keys must remain untouched");
+});

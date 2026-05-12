@@ -17,7 +17,7 @@ import {
 import { extractDualViewAdvice } from "../lib/skills/dual-view-advice";
 import { requireAuth } from "../lib/auth";
 import { logActivity } from "../lib/activity";
-import { serializeRun } from "../lib/serializers";
+import { serializeRun, serializeRunForProspect } from "../lib/serializers";
 import {
   skillOrchestrationService,
   checkRunAnalysisGate,
@@ -177,7 +177,11 @@ router.get(
       res.status(404).json({ error: "Geen analyse gevonden" });
       return;
     }
-    res.json(serializeRun(run));
+    res.json(
+      req.user!.role === "prospect"
+        ? serializeRunForProspect(run)
+        : serializeRun(run),
+    );
   },
 );
 
