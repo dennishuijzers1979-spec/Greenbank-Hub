@@ -8,6 +8,7 @@ import {
   useGenerateMemorandum, useGetMemorandum, getGetMemorandumQueryKey,
   useListPartners, getListPartnersQueryKey,
   useSubmitDossierToPartners,
+  useListDossierSubmissions, getListDossierSubmissionsQueryKey,
   useGetLatestRun, getGetLatestRunQueryKey,
   useGetDualViewAdvice, getGetDualViewAdviceQueryKey,
 } from "@workspace/api-client-react";
@@ -18,7 +19,10 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Activity, AlertCircle, AlertTriangle, ArrowLeft, Building2, CheckCircle2, Clock, Download, FileText, Loader2, Send, XCircle } from "lucide-react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Separator } from "@/components/ui/separator";
+import { Activity, AlertCircle, AlertTriangle, ArrowLeft, Building2, CheckCircle2, Clock, Download, FileText, Loader2, Mail, Send, XCircle } from "lucide-react";
 import { KredietworkflowFinancierCard, type KwCanonical } from "@/components/kredietworkflow-financier-card";
 import { useToast } from "@/hooks/use-toast";
 import { format } from "date-fns";
@@ -37,6 +41,8 @@ export default function DossierDetail() {
   const [isDecisionDialogOpen, setIsDecisionDialogOpen] = useState(false);
   const [decisionType, setDecisionType] = useState<"approve" | "reject" | "request_additional_info" | null>(null);
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
+  const [isPackagePreviewOpen, setIsPackagePreviewOpen] = useState(false);
+  const [partnerSubmissionNotes, setPartnerSubmissionNotes] = useState("");
 
   const DECIDABLE_STATUSES = new Set([
     "submitted_to_geenbank",
@@ -90,6 +96,7 @@ export default function DossierDetail() {
   const { data: documents } = useListDossierDocuments(id, { query: { queryKey: getListDossierDocumentsQueryKey(id), enabled: !!id } });
   const { data: memo } = useGetMemorandum(id, { query: { queryKey: getGetMemorandumQueryKey(id), enabled: !!id, retry: false } });
   const { data: partners } = useListPartners({ query: { queryKey: getListPartnersQueryKey() } });
+  const { data: existingSubmissions } = useListDossierSubmissions(id, { query: { queryKey: getListDossierSubmissionsQueryKey(id), enabled: !!id } });
 
   const decisionMutation = useMakeDossierDecision();
   const memoMutation = useGenerateMemorandum();
@@ -173,19 +180,87 @@ export default function DossierDetail() {
     });
   };
 
-  const handleSubmitToPartners = () => {
+  const SUBMITTABLE_STATUSES = new Set([
+    "approved_for_partner_submission",
+    "memorandum_generated",
+  ]);
+
+  const activePartners = (partners ?? []).filter(p => p.activeStatus === "active");
+  const requestedAmountNum = dossier.requestedAmount ?? 0;
+
+  const partnerFitsTicketRange = (p: { minimumTicketSize?: number | null; maximumTicketSize?: number | null }) => {
+    if (!requestedAmountNum) return true;
+    const min = p.minimumTicketSize ?? null;
+    const max = p.maximumTicketSize ?? null;
+    if (min !== null && requestedAmountNum < min) return false;
+    if (max !== null && requestedAmountNum > max) return false;
+    return true;
+  };
+
+  const selectedPartnerObjects = activePartners.filter(p => selectedPartners.includes(p.id));
+  const ticketWarnings = selectedPartnerObjects.filter(p => !partnerFitsTicketRange(p));
+
+  const openPackagePreview = () => {
     if (selectedPartners.length === 0) {
-      toast({ title: "Selecteer partners", description: "Kies minimaal 1 partner.", variant: "destructive" });
+      toast({ title: "Selecteer partners", description: "Kies minimaal 1 actieve partner.", variant: "destructive" });
       return;
     }
+    if (!SUBMITTABLE_STATUSES.has(dossier.status)) {
+      toast({
+        title: "Indienen niet mogelijk",
+        description: "Het dossier moet eerst goedgekeurd zijn voor partneraanbod.",
+        variant: "destructive",
+      });
+      return;
+    }
+    setIsPackagePreviewOpen(true);
+  };
 
-    submitPartnerMutation.mutate({ dossierId: id, data: { partnerIds: selectedPartners } }, {
-      onSuccess: () => {
-        queryClient.invalidateQueries({ queryKey: getGetDossierQueryKey(id) });
-        toast({ title: "Ingediend", description: "Dossier verstuurd naar geselecteerde partners." });
-        setSelectedPartners([]);
-      }
-    });
+  const handleSubmitToPartners = () => {
+    if (selectedPartners.length === 0) return;
+    if (submitPartnerMutation.isPending) return;
+
+    submitPartnerMutation.mutate(
+      {
+        dossierId: id,
+        data: {
+          partnerIds: selectedPartners,
+          notes: partnerSubmissionNotes || null,
+        },
+      },
+      {
+        onSuccess: () => {
+          queryClient.invalidateQueries({ queryKey: getGetDossierQueryKey(id) });
+          queryClient.invalidateQueries({ queryKey: getListDossierSubmissionsQueryKey(id) });
+          toast({
+            title: "Mock-aanbieding aangemaakt",
+            description: `Aanbiedpakket geregistreerd voor ${selectedPartners.length} ${selectedPartners.length === 1 ? "partner" : "partners"} (mock-verzending).`,
+          });
+          setSelectedPartners([]);
+          setPartnerSubmissionNotes("");
+          setIsPackagePreviewOpen(false);
+        },
+        onError: (err: unknown) => {
+          const status =
+            err && typeof err === "object" && "status" in err
+              ? Number((err as { status: unknown }).status) || 0
+              : 0;
+          const data =
+            err &&
+            typeof err === "object" &&
+            "data" in err &&
+            (err as { data: unknown }).data &&
+            typeof (err as { data: unknown }).data === "object"
+              ? ((err as { data: { error?: string; message?: string } }).data ?? {})
+              : {};
+          toast({
+            title: data.error ?? (status === 409 ? "Indienen niet mogelijk" : "Indienen mislukt"),
+            description: data.message ?? "Probeer het later opnieuw.",
+            variant: "destructive",
+          });
+        },
+      },
+    );
   };
 
   return (
@@ -281,7 +356,7 @@ export default function DossierDetail() {
           <TabsTrigger value="intake">Intake</TabsTrigger>
           <TabsTrigger value="documents">Documenten</TabsTrigger>
           <TabsTrigger value="memo" disabled={!['approved_for_partner_submission', 'memorandum_generated', 'submitted_to_partners'].includes(dossier.status)}>Memorandum</TabsTrigger>
-          <TabsTrigger value="partners" disabled={!['memorandum_generated', 'submitted_to_partners'].includes(dossier.status)}>Partners</TabsTrigger>
+          <TabsTrigger value="partners" disabled={!['approved_for_partner_submission', 'memorandum_generated', 'submitted_to_partners', 'partner_response_received'].includes(dossier.status)}>Partners</TabsTrigger>
         </TabsList>
 
         <TabsContent value="overview" className="space-y-6">
@@ -766,47 +841,159 @@ export default function DossierDetail() {
           </Card>
         </TabsContent>
 
-        <TabsContent value="partners">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            <Card className="md:col-span-2">
+        <TabsContent value="partners" className="space-y-6">
+          {!SUBMITTABLE_STATUSES.has(dossier.status) && (
+            <Alert data-testid="partners-already-submitted">
+              <CheckCircle2 className="w-4 h-4" />
+              <AlertTitle>Reeds aangeboden bij partners</AlertTitle>
+              <AlertDescription>
+                Dit dossier is al aangeboden bij partners en kan niet opnieuw worden ingediend.
+                Hieronder zie je de bestaande aanbiedingen.
+              </AlertDescription>
+            </Alert>
+          )}
+
+          {SUBMITTABLE_STATUSES.has(dossier.status) && (
+            <Card data-testid="partner-selection-card">
               <CardHeader>
                 <CardTitle>Partner Selectie</CardTitle>
-                <CardDescription>Selecteer de financiers waarnaar dit dossier verstuurd moet worden.</CardDescription>
+                <CardDescription>
+                  Selecteer één of meer actieve financiers voor dit dossier. Aangevraagd bedrag:
+                  {" "}<strong>€{Number(requestedAmountNum).toLocaleString("nl-NL")}</strong>
+                  {" • "}Doel: {dossier.financingPurpose ?? "n.v.t."}
+                </CardDescription>
               </CardHeader>
-              <CardContent>
-                <div className="space-y-4">
-                  {partners?.map(partner => (
-                    <div key={partner.id} className="flex items-start space-x-3 p-3 border rounded-lg">
-                      <Checkbox 
-                        id={`partner-${partner.id}`} 
-                        checked={selectedPartners.includes(partner.id)}
-                        onCheckedChange={(checked) => {
-                          if (checked) setSelectedPartners(prev => [...prev, partner.id]);
-                          else setSelectedPartners(prev => prev.filter(id => id !== partner.id));
-                        }}
-                      />
-                      <div className="grid gap-1.5 leading-none">
-                        <label htmlFor={`partner-${partner.id}`} className="text-sm font-medium leading-none cursor-pointer">
-                          {partner.name}
-                        </label>
-                        <p className="text-xs text-muted-foreground">Focus: {partner.productFocus}</p>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-                <div className="mt-6">
-                  <Button 
-                    className="w-full" 
-                    disabled={selectedPartners.length === 0 || submitPartnerMutation.isPending}
-                    onClick={handleSubmitToPartners}
+              <CardContent className="space-y-4">
+                {activePartners.length === 0 ? (
+                  <Alert variant="destructive">
+                    <AlertCircle className="w-4 h-4" />
+                    <AlertTitle>Geen actieve partners beschikbaar</AlertTitle>
+                    <AlertDescription>
+                      Er zijn momenteel geen actieve partner-financiers geconfigureerd.
+                      Vraag een beheerder om partners toe te voegen of te activeren.
+                    </AlertDescription>
+                  </Alert>
+                ) : (
+                  <div className="space-y-3">
+                    {activePartners.map(partner => {
+                      const fits = partnerFitsTicketRange(partner);
+                      const min = partner.minimumTicketSize ?? null;
+                      const max = partner.maximumTicketSize ?? null;
+                      const ticketLabel =
+                        min !== null || max !== null
+                          ? `€${(min ?? 0).toLocaleString("nl-NL")}–€${(max ?? 0).toLocaleString("nl-NL")}`
+                          : "geen ticket-range opgegeven";
+                      return (
+                        <div
+                          key={partner.id}
+                          data-testid={`partner-row-${partner.id}`}
+                          className="flex items-start space-x-3 p-3 border rounded-lg"
+                        >
+                          <Checkbox
+                            id={`partner-${partner.id}`}
+                            data-testid={`partner-checkbox-${partner.id}`}
+                            checked={selectedPartners.includes(partner.id)}
+                            onCheckedChange={(checked) => {
+                              if (checked) setSelectedPartners(prev => [...prev, partner.id]);
+                              else setSelectedPartners(prev => prev.filter(pid => pid !== partner.id));
+                            }}
+                          />
+                          <div className="grid gap-1.5 leading-none flex-1">
+                            <div className="flex items-center gap-2">
+                              <label htmlFor={`partner-${partner.id}`} className="text-sm font-medium leading-none cursor-pointer">
+                                {partner.name}
+                              </label>
+                              <Badge variant="outline" className="text-[10px]">actief</Badge>
+                              {!fits && (
+                                <Badge variant="outline" className="text-[10px] border-amber-300 text-amber-700">
+                                  buiten ticket-range
+                                </Badge>
+                              )}
+                            </div>
+                            <p className="text-xs text-muted-foreground">
+                              Focus: {partner.productFocus} • Ticket: {ticketLabel}
+                            </p>
+                            {partner.notes && (
+                              <p className="text-xs text-muted-foreground italic">{partner.notes}</p>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {ticketWarnings.length > 0 && (
+                  <Alert
+                    data-testid="ticket-range-warning"
+                    className="border-amber-300 bg-amber-50 text-amber-900"
                   >
-                    {submitPartnerMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Send className="w-4 h-4 mr-2" />}
-                    Verstuur naar {selectedPartners.length} {selectedPartners.length === 1 ? 'partner' : 'partners'}
+                    <AlertTriangle className="w-4 h-4" />
+                    <AlertTitle>Aangevraagd bedrag valt buiten ticket-range</AlertTitle>
+                    <AlertDescription>
+                      €{Number(requestedAmountNum).toLocaleString("nl-NL")} past niet bij:{" "}
+                      {ticketWarnings.map(p => p.name).join(", ")}.
+                      De aanbieding wordt alsnog verstuurd, maar partners zullen mogelijk afzien.
+                    </AlertDescription>
+                  </Alert>
+                )}
+
+                <div className="flex gap-2 pt-2">
+                  <Button
+                    variant="outline"
+                    onClick={() => setLocation("/dossiers")}
+                    data-testid="button-back-to-queue"
+                  >
+                    <ArrowLeft className="w-4 h-4 mr-2" /> Terug naar wachtrij
+                  </Button>
+                  <Button
+                    className="flex-1"
+                    disabled={selectedPartners.length === 0 || submitPartnerMutation.isPending}
+                    onClick={openPackagePreview}
+                    data-testid="button-prepare-package"
+                  >
+                    <FileText className="w-4 h-4 mr-2" />
+                    Aanbiedpakket voorbereiden ({selectedPartners.length})
                   </Button>
                 </div>
               </CardContent>
             </Card>
-          </div>
+          )}
+
+          <Card data-testid="partner-submissions-card">
+            <CardHeader>
+              <CardTitle>Verzonden aanbiedingen</CardTitle>
+              <CardDescription>Mock-aanbiedingen die voor dit dossier zijn aangemaakt.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              {!existingSubmissions || existingSubmissions.length === 0 ? (
+                <p className="text-sm text-muted-foreground italic">Nog geen aanbiedingen verzonden.</p>
+              ) : (
+                <div className="space-y-3" data-testid="partner-submissions-list">
+                  {existingSubmissions.map(s => (
+                    <div key={s.id} className="border rounded-lg p-3 space-y-1" data-testid={`submission-${s.id}`}>
+                      <div className="flex items-center gap-2">
+                        <Mail className="w-4 h-4 text-muted-foreground" />
+                        <span className="text-sm font-medium">{s.partnerName}</span>
+                        <Badge variant="outline" className="text-[10px]">{s.status}</Badge>
+                        {s.usedMockMode && (
+                          <Badge variant="outline" className="text-[10px]">mock</Badge>
+                        )}
+                      </div>
+                      {s.packageSummary && (
+                        <p className="text-xs text-muted-foreground">{s.packageSummary}</p>
+                      )}
+                      {s.submittedAt && (
+                        <p className="text-xs text-muted-foreground">
+                          Verzonden: {format(new Date(s.submittedAt), "d MMM yyyy HH:mm", { locale: nl })}
+                        </p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
         </TabsContent>
       </Tabs>
 
@@ -873,6 +1060,146 @@ export default function DossierDetail() {
             >
               {decisionMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
               Bevestig Besluit
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isPackagePreviewOpen} onOpenChange={setIsPackagePreviewOpen}>
+        <DialogContent className="max-w-3xl max-h-[85vh] overflow-y-auto" data-testid="package-preview-dialog">
+          <DialogHeader>
+            <DialogTitle>Aanbiedpakket — voorbeeld</DialogTitle>
+            <DialogDescription>
+              Dit is een interne preview van het pakket dat (in mock-modus) naar de geselecteerde partners
+              wordt verzonden. De ondernemer ziet deze inhoud niet.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 text-sm">
+            <section>
+              <h4 className="font-semibold mb-1">Bedrijf & aanvraag</h4>
+              <ul className="text-muted-foreground space-y-0.5">
+                <li>Bedrijf: {dossier.prospect?.companyName ?? "n.v.t."}</li>
+                <li>Contactpersoon: {dossier.prospect?.contactName ?? "n.v.t."}</li>
+                <li>Aangevraagd bedrag: €{Number(requestedAmountNum).toLocaleString("nl-NL")}</li>
+                <li>Doel: {dossier.financingPurpose ?? "n.v.t."}</li>
+                <li>Voorkeur financieringstype: {dossier.financingTypePreference ?? "n.v.t."}</li>
+              </ul>
+            </section>
+
+            <Separator />
+
+            <section>
+              <h4 className="font-semibold mb-1">AI-verdict & scores</h4>
+              <ul className="text-muted-foreground space-y-0.5">
+                <li>Verdict: {dossier.aiVerdict ?? "n.v.t."}</li>
+                <li>Volledigheid: {dossier.completenessScore ?? "—"} / 100</li>
+                <li>Correctheid: {dossier.correctnessScore ?? "—"} / 100</li>
+                <li>Vertrouwen: {dossier.confidenceScore ?? "—"} / 100</li>
+                <li>Levensvatbaarheid: {dossier.viabilityScore ?? "—"} / 100</li>
+              </ul>
+            </section>
+
+            {dualAdvice && (
+              <>
+                <Separator />
+                <section>
+                  <h4 className="font-semibold mb-1">Dual-view advies</h4>
+                  <p className="text-muted-foreground text-xs">
+                    Partnerview &amp; ondernemerview beschikbaar — zie tab AI Analyse voor volledige tekst.
+                  </p>
+                </section>
+              </>
+            )}
+
+            {report && (
+              <>
+                <Separator />
+                <section>
+                  <h4 className="font-semibold mb-1">Financierrapportage</h4>
+                  <p className="text-muted-foreground text-xs">
+                    Volledig rapport beschikbaar — zie tab AI Analyse.
+                  </p>
+                </section>
+              </>
+            )}
+
+            <Separator />
+
+            <section>
+              <h4 className="font-semibold mb-1">Geselecteerde partners ({selectedPartnerObjects.length})</h4>
+              <ul className="text-muted-foreground space-y-0.5">
+                {selectedPartnerObjects.map(p => (
+                  <li key={p.id}>
+                    {p.name} — {p.productFocus}
+                    {!partnerFitsTicketRange(p) && (
+                      <span className="text-amber-700 ml-1">(buiten ticket-range)</span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </section>
+
+            <Separator />
+
+            <section>
+              <h4 className="font-semibold mb-1">Documenten ({documents?.length ?? 0})</h4>
+              {documents && documents.length > 0 ? (
+                <ul className="text-muted-foreground space-y-0.5">
+                  {documents.map(d => (
+                    <li key={d.id}>{d.filename} ({d.documentType})</li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="text-muted-foreground italic">Geen documenten gekoppeld.</p>
+              )}
+            </section>
+
+            <Separator />
+
+            <section className="space-y-1">
+              <label htmlFor="partner-submission-notes" className="font-semibold">
+                Begeleidende notitie aan partner (optioneel)
+              </label>
+              <Textarea
+                id="partner-submission-notes"
+                data-testid="partner-submission-notes"
+                placeholder="Bijv: focus ligt op snelle besluitvorming..."
+                value={partnerSubmissionNotes}
+                onChange={e => setPartnerSubmissionNotes(e.target.value)}
+                rows={3}
+              />
+            </section>
+
+            <Alert className="border-blue-300 bg-blue-50 text-blue-900">
+              <Mail className="w-4 h-4" />
+              <AlertTitle>Mock-verzending</AlertTitle>
+              <AlertDescription className="text-xs">
+                Verzending gebeurt in mock-modus — er wordt geen daadwerkelijke e-mail verstuurd.
+                Voor elke geselecteerde partner wordt een PartnerSubmission-record (status:
+                <code className="mx-1">submitted_mock</code>) aangemaakt en het dossier gaat naar
+                status <code>submitted_to_partners</code>.
+              </AlertDescription>
+            </Alert>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setIsPackagePreviewOpen(false)}
+              disabled={submitPartnerMutation.isPending}
+            >
+              Annuleren
+            </Button>
+            <Button
+              onClick={handleSubmitToPartners}
+              disabled={submitPartnerMutation.isPending}
+              data-testid="button-confirm-mock-send"
+            >
+              {submitPartnerMutation.isPending ? (
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+              ) : (
+                <Send className="w-4 h-4 mr-2" />
+              )}
+              Mock-verzending bevestigen
             </Button>
           </DialogFooter>
         </DialogContent>
