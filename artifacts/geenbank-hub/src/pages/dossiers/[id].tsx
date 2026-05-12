@@ -19,6 +19,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Activity, AlertCircle, AlertTriangle, ArrowLeft, Building2, CheckCircle2, Clock, Download, FileText, Loader2, Send, XCircle } from "lucide-react";
+import { KredietworkflowFinancierCard, type KwCanonical } from "@/components/kredietworkflow-financier-card";
 import { useToast } from "@/hooks/use-toast";
 import { format } from "date-fns";
 import { nl } from "date-fns/locale";
@@ -472,6 +473,28 @@ export default function DossierDetail() {
                   </dl>
                 </CardContent>
               </Card>
+            );
+          })()}
+
+          {latestRun && latestRun.skillInvocations && (() => {
+            const kwInv = latestRun.skillInvocations.find(
+              (i) => i.skillName === "GeenbankKredietworkflow",
+            ) as (typeof latestRun.skillInvocations)[number] | undefined;
+            const kwExtras = kwInv
+              ? (kwInv as unknown as { extras?: { canonical?: KwCanonical | null } | null }).extras
+              : null;
+            const canonical = kwExtras?.canonical ?? null;
+            if (!kwInv && !canonical) return null;
+            return (
+              <KredietworkflowFinancierCard
+                canonical={canonical}
+                invocation={kwInv ? {
+                  provider: kwInv.provider,
+                  usedMockMode: kwInv.usedMockMode,
+                  fallbackReason: kwInv.fallbackReason,
+                  model: kwInv.model,
+                } : null}
+              />
             );
           })()}
 
