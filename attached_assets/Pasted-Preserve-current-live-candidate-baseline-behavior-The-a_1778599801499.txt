@@ -1,0 +1,112 @@
+Preserve current live-candidate baseline behavior.
+
+The app has no current P0 blockers from manual preview testing.
+Do not redesign UI in this task.
+Do not work on visual polish.
+Do not change AI scoring/gates unless required for the decision workflow.
+Do not change RBAC/security behavior except to tighten it.
+
+Task: Harden the loan officer decision and follow-up workflow.
+
+Goal:
+Make the post-review workflow functionally complete enough for a first live version:
+- approve
+- reject
+- request additional information
+- status updates
+- prospect visibility
+- activity logging
+- mock email/logging where SendGrid is unavailable
+
+1. Inspect current decision workflow
+
+Review existing backend and frontend around:
+- POST /dossiers/:dossierId/decision
+- dossier status transitions
+- conditions
+- ActivityLog
+- SendGridEmailService/mock email
+- prospect dashboard/status display
+- loan officer decision panel
+- additional document/info requests
+
+Report current behavior before changing code.
+
+2. Centralize/verify business rules
+
+Ensure decision actions are allowed only for loan_officer/admin and only for officer-visible dossiers.
+
+Rules:
+- approve only from submitted_to_geenbank / loan_officer_review or suitable review statuses
+- reject only from review statuses
+- request_additional_info creates blocking condition(s) or requested item(s)
+- request_additional_info updates status to additional_info_requested
+- prospect sees requested items/status
+- every decision creates ActivityLog
+- mock email is logged if SendGrid is not configured
+- approved dossier can proceed to partner selection
+- rejected dossier cannot proceed to partner submission
+
+Do not scatter these rules in frontend components.
+
+3. Backend hardening
+
+If missing, add/adjust:
+- typed request/response validation for decision endpoint
+- status transition guard
+- activity log entries
+- mock SendGrid call/log payload
+- clear Dutch error responses
+- tests for invalid transitions and RBAC
+
+4. Frontend behavior
+
+Loan officer dossier detail should:
+- show current decision status
+- allow approve/reject/request additional info only when valid
+- show loading/success/error states
+- prevent duplicate clicks
+- show clear Dutch confirmation/result
+- keep primary buttons functional
+
+Prospect dashboard/report should:
+- show additional info requested status
+- show requested conditions/items
+- explain what the entrepreneur must do next
+- not expose internal loan officer notes unless intended
+
+5. Tests
+
+Add/update tests for:
+- loan officer can approve eligible dossier
+- loan officer can reject eligible dossier
+- loan officer can request additional info and creates condition/activity
+- prospect can see requested condition/status
+- prospect cannot call decision endpoint
+- loan officer cannot decide on pre-submission hidden dossier
+- invalid transition returns clear error
+- mock email path does not crash when SendGrid key missing
+
+6. Checks
+
+Run:
+node scripts/check-skill-packs.mjs
+pnpm --filter @workspace/api-server run test
+pnpm run typecheck
+pnpm run build
+
+7. Commit and push
+
+Commit with:
+Geenbank Hub: harden loan officer decision workflow
+
+8. Report back
+
+Report:
+- current behavior found
+- changed files
+- status transition rules
+- tests added
+- checks output
+- what remains mocked
+- manual verification steps
