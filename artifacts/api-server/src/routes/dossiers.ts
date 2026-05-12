@@ -222,6 +222,17 @@ router.get("/dossiers/:dossierId", requireAuth(["loan_officer", "admin"]), async
   res.json(serializeDossier(row.dossiers, row.prospect_profiles, c.documentsCount, c.blockingConditionsCount));
 });
 
+/**
+ * Statuses from which a loan officer/admin may still take a decision.
+ * Once a dossier has been approved, rejected, sent on to partners, or
+ * closed, the decision endpoint is no longer a valid action.
+ */
+const DECIDABLE_STATUSES = new Set<string>([
+  "submitted_to_geenbank",
+  "loan_officer_review",
+  "additional_info_requested",
+]);
+
 router.post("/dossiers/:dossierId/decision", requireAuth(["loan_officer", "admin"]), async (req, res): Promise<void> => {
   const params = MakeDossierDecisionParams.safeParse(req.params);
   if (!params.success) {
@@ -249,6 +260,31 @@ router.post("/dossiers/:dossierId/decision", requireAuth(["loan_officer", "admin
   }
   const dossier = row.dossiers;
   const prospect = row.prospect_profiles;
+
+  // Status transition guard — block decisions on dossiers that have
+  // already left the review stage (approved/rejected/in-partner-flow/closed).
+  if (!DECIDABLE_STATUSES.has(dossier.status)) {
+    res.status(409).json({
+      error: "Besluit niet meer mogelijk",
+      message: `Het dossier staat in status \"${dossier.status}\" en kan niet opnieuw worden beoordeeld.`,
+    });
+    return;
+  }
+
+  // request_additional_info must include at least one concrete item;
+  // otherwise the prospect has no actionable next step.
+  if (
+    body.data.decision === "request_additional_info" &&
+    !(body.data.requestedItems && body.data.requestedItems.length > 0)
+  ) {
+    res.status(400).json({
+      error: "Geef minimaal één gevraagd item op",
+      message:
+        "Bij een verzoek om aanvullende informatie moet minimaal één concreet item worden opgegeven.",
+    });
+    return;
+  }
+
   let nextStatus = dossier.status;
   let actionLabel = "";
   if (body.data.decision === "approve") {
@@ -260,16 +296,15 @@ router.post("/dossiers/:dossierId/decision", requireAuth(["loan_officer", "admin
   } else {
     nextStatus = "additional_info_requested";
     actionLabel = "aanvullende informatie gevraagd";
-    if (body.data.requestedItems?.length) {
-      for (const item of body.data.requestedItems) {
-        await db.insert(conditionsTable).values({
-          dossierId: dossier.id,
-          type: "blocking",
-          title: item,
-          description: item,
-          status: "open",
-        });
-      }
+    for (const item of body.data.requestedItems!) {
+      await db.insert(conditionsTable).values({
+        dossierId: dossier.id,
+        type: "blocking",
+        title: item,
+        description: item,
+        requiredAction: item,
+        status: "open",
+      });
     }
   }
   const [updated] = await db
@@ -287,21 +322,36 @@ router.post("/dossiers/:dossierId/decision", requireAuth(["loan_officer", "admin
     actor: req.user!,
     action: `decision_${body.data.decision}`,
     description: `Kredietacceptant heeft het dossier ${actionLabel}.`,
+    metadata: {
+      previousStatus: dossier.status,
+      nextStatus,
+      requestedItems:
+        body.data.decision === "request_additional_info"
+          ? body.data.requestedItems
+          : undefined,
+    },
   });
   // Notify the prospect — not the loan officer — about the decision.
+  // Email delivery (live or mock) must never break the decision flow.
   const [prospectUser] = await db
     .select()
     .from(usersTable)
     .where(eq(usersTable.id, prospect.userId))
     .limit(1);
   if (prospectUser) {
-    await sendEmail({
-      to: prospectUser.email,
-      subject: `Je financieringsdossier is ${actionLabel}`,
-      body:
-        body.data.notes ??
-        `De kredietacceptant heeft je dossier ${actionLabel}. Log in op Geenbank Hub voor de details.`,
-    });
+    try {
+      await sendEmail({
+        to: prospectUser.email,
+        subject: `Je financieringsdossier is ${actionLabel}`,
+        body:
+          body.data.notes ??
+          `De kredietacceptant heeft je dossier ${actionLabel}. Log in op Geenbank Hub voor de details.`,
+      });
+    } catch (err) {
+      // Swallow — the decision must persist even if SendGrid is unhappy.
+      // The mock path already logs; the live path will log via pino-http.
+      void err;
+    }
   }
   const c = await counts(dossier.id);
   res.json(serializeDossier(updated, prospect, c.documentsCount, c.blockingConditionsCount));

@@ -203,6 +203,69 @@ export default function DossierHub() {
         </CardContent>
       </Card>
 
+      {dossier.status === "additional_info_requested" && (
+        <Alert
+          data-testid="alert-additional-info-requested"
+          className="border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200"
+        >
+          <AlertCircle className="w-4 h-4" />
+          <AlertTitle>De kredietacceptant vraagt aanvullende informatie</AlertTitle>
+          <AlertDescription className="space-y-2">
+            <p>
+              Lever de onderstaande items aan om je dossier weer in beoordeling
+              te krijgen. Zodra alle items zijn afgehandeld, gaat je dossier
+              automatisch terug naar de kredietacceptant.
+            </p>
+            {conditions && conditions.filter(c => c.type === "blocking" && c.status === "open").length > 0 ? (
+              <ul
+                data-testid="prospect-requested-items"
+                className="list-disc pl-5 text-sm space-y-1"
+              >
+                {conditions
+                  .filter(c => c.type === "blocking" && c.status === "open")
+                  .map(c => (
+                    <li key={c.id}>{c.requiredAction || c.title}</li>
+                  ))}
+              </ul>
+            ) : (
+              <p className="text-sm italic">
+                Geen specifieke items opgegeven — neem contact op met je
+                kredietacceptant voor de details.
+              </p>
+            )}
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {dossier.status === "rejected_by_loan_officer" && (
+        <Alert
+          data-testid="alert-rejected"
+          variant="destructive"
+          className="bg-destructive/10 border-destructive/30 text-destructive"
+        >
+          <AlertCircle className="w-4 h-4" />
+          <AlertTitle>Dossier afgewezen</AlertTitle>
+          <AlertDescription>
+            Je dossier is door de kredietacceptant afgewezen. Neem contact op
+            met je begeleider voor toelichting en eventuele vervolgstappen.
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {dossier.status === "approved_for_partner_submission" && (
+        <Alert
+          data-testid="alert-approved"
+          className="border-green-300 bg-green-50 text-green-900 dark:border-green-800 dark:bg-green-950/30 dark:text-green-200"
+        >
+          <CheckCircle2 className="w-4 h-4" />
+          <AlertTitle>Dossier goedgekeurd voor partnerselectie</AlertTitle>
+          <AlertDescription>
+            Je dossier is goedgekeurd. De kredietacceptant zal je dossier
+            voorleggen aan onze partnerfinanciers.
+          </AlertDescription>
+        </Alert>
+      )}
+
       <div className="space-y-4">
         <h2 className="text-xl font-semibold">Acties</h2>
         

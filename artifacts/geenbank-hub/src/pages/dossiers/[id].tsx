@@ -32,10 +32,24 @@ export default function DossierDetail() {
   const queryClient = useQueryClient();
 
   const [decisionNotes, setDecisionNotes] = useState("");
+  const [requestedItemsText, setRequestedItemsText] = useState("");
   const [selectedPartners, setSelectedPartners] = useState<string[]>([]);
   const [isDecisionDialogOpen, setIsDecisionDialogOpen] = useState(false);
   const [decisionType, setDecisionType] = useState<"approve" | "reject" | "request_additional_info" | null>(null);
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
+
+  const DECIDABLE_STATUSES = new Set([
+    "submitted_to_geenbank",
+    "loan_officer_review",
+    "additional_info_requested",
+  ]);
+
+  const openDecisionDialog = (type: "approve" | "reject" | "request_additional_info") => {
+    setDecisionType(type);
+    setDecisionNotes("");
+    setRequestedItemsText("");
+    setIsDecisionDialogOpen(true);
+  };
 
   const handleDownload = async (docId: string, filename: string) => {
     setDownloadingId(docId);
@@ -85,16 +99,68 @@ export default function DossierDetail() {
     return <div className="p-8 flex justify-center"><Loader2 className="w-8 h-8 animate-spin text-primary" /></div>;
   }
 
+  const parsedRequestedItems = requestedItemsText
+    .split(/\r?\n/)
+    .map(s => s.trim())
+    .filter(Boolean);
+
   const handleDecision = () => {
     if (!decisionType) return;
-    
-    decisionMutation.mutate({ dossierId: id, data: { decision: decisionType, notes: decisionNotes } }, {
-      onSuccess: () => {
-        queryClient.invalidateQueries({ queryKey: getGetDossierQueryKey(id) });
-        setIsDecisionDialogOpen(false);
-        toast({ title: "Besluit opgeslagen", description: `Dossier status is bijgewerkt.` });
-      }
-    });
+    if (decisionMutation.isPending) return;
+
+    if (decisionType === "request_additional_info" && parsedRequestedItems.length === 0) {
+      toast({
+        title: "Geef minimaal één item op",
+        description: "Beschrijf één item per regel dat de ondernemer moet aanleveren.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    decisionMutation.mutate(
+      {
+        dossierId: id,
+        data: {
+          decision: decisionType,
+          notes: decisionNotes || null,
+          ...(decisionType === "request_additional_info"
+            ? { requestedItems: parsedRequestedItems }
+            : {}),
+        },
+      },
+      {
+        onSuccess: () => {
+          queryClient.invalidateQueries({ queryKey: getGetDossierQueryKey(id) });
+          setIsDecisionDialogOpen(false);
+          const label =
+            decisionType === "approve"
+              ? "goedgekeurd voor partners"
+              : decisionType === "reject"
+                ? "afgewezen"
+                : "aanvullende informatie gevraagd";
+          toast({ title: "Besluit opgeslagen", description: `Dossier is ${label}.` });
+        },
+        onError: (err: unknown) => {
+          const status =
+            err && typeof err === "object" && "status" in err
+              ? Number((err as { status: unknown }).status) || 0
+              : 0;
+          const data =
+            err &&
+            typeof err === "object" &&
+            "data" in err &&
+            (err as { data: unknown }).data &&
+            typeof (err as { data: unknown }).data === "object"
+              ? ((err as { data: { error?: string; message?: string } }).data ?? {})
+              : {};
+          toast({
+            title: data.error ?? (status === 409 ? "Besluit niet meer mogelijk" : "Besluit mislukt"),
+            description: data.message ?? "Probeer het later opnieuw.",
+            variant: "destructive",
+          });
+        },
+      },
+    );
   };
 
   const handleGenerateMemo = () => {
@@ -139,15 +205,31 @@ export default function DossierDetail() {
           <p className="text-muted-foreground">{dossier.prospect?.contactName} • Ingediend op {dossier.submittedAt ? format(new Date(dossier.submittedAt), 'd MMM yyyy', { locale: nl }) : '-'}</p>
         </div>
 
-        {dossier.status === 'loan_officer_review' && (
-          <div className="flex gap-2">
-            <Button variant="outline" className="text-amber-600 border-amber-200 hover:bg-amber-50" onClick={() => { setDecisionType("request_additional_info"); setIsDecisionDialogOpen(true); }}>
+        {DECIDABLE_STATUSES.has(dossier.status) && (
+          <div className="flex gap-2" data-testid="officer-decision-actions">
+            <Button
+              variant="outline"
+              className="text-amber-600 border-amber-200 hover:bg-amber-50"
+              data-testid="button-request-info"
+              disabled={decisionMutation.isPending}
+              onClick={() => openDecisionDialog("request_additional_info")}
+            >
               Aanvullende info vragen
             </Button>
-            <Button variant="destructive" onClick={() => { setDecisionType("reject"); setIsDecisionDialogOpen(true); }}>
+            <Button
+              variant="destructive"
+              data-testid="button-reject"
+              disabled={decisionMutation.isPending}
+              onClick={() => openDecisionDialog("reject")}
+            >
               Afwijzen
             </Button>
-            <Button className="bg-green-600 hover:bg-green-700 text-white" onClick={() => { setDecisionType("approve"); setIsDecisionDialogOpen(true); }}>
+            <Button
+              className="bg-green-600 hover:bg-green-700 text-white"
+              data-testid="button-approve"
+              disabled={decisionMutation.isPending}
+              onClick={() => openDecisionDialog("approve")}
+            >
               <CheckCircle2 className="w-4 h-4 mr-2" /> Goedkeuren voor partners
             </Button>
           </div>
@@ -737,24 +819,57 @@ export default function DossierDetail() {
               {decisionType === 'request_additional_info' && 'Aanvullende info vragen'}
             </DialogTitle>
             <DialogDescription>
-              Voeg notities toe bij uw besluit. Deze zijn zichtbaar voor het team.
+              {decisionType === 'request_additional_info'
+                ? 'Beschrijf concreet welke aanvullende informatie de ondernemer moet aanleveren. Eén item per regel — elk item wordt als blokkerende voorwaarde aangemaakt.'
+                : 'Voeg notities toe bij uw besluit. Deze zijn alleen zichtbaar voor het team — de ondernemer ziet alleen de status en eventueel gevraagde items.'}
             </DialogDescription>
           </DialogHeader>
-          <div className="py-4">
-            <Textarea 
-              placeholder="Typ hier uw motivatie of notities..." 
-              value={decisionNotes}
-              onChange={e => setDecisionNotes(e.target.value)}
-              rows={4}
-            />
+          <div className="py-4 space-y-4">
+            {decisionType === 'request_additional_info' && (
+              <div className="space-y-1">
+                <label className="text-sm font-medium" htmlFor="decision-requested-items">
+                  Gevraagde items <span className="text-destructive">*</span>
+                </label>
+                <Textarea
+                  id="decision-requested-items"
+                  data-testid="decision-requested-items"
+                  placeholder={"Bijv:\nKopie identiteitsbewijs DGA\nMeest recente bankafschrift Q4"}
+                  value={requestedItemsText}
+                  onChange={e => setRequestedItemsText(e.target.value)}
+                  rows={4}
+                />
+                <p className="text-xs text-muted-foreground">
+                  {parsedRequestedItems.length === 0
+                    ? 'Nog geen items.'
+                    : `${parsedRequestedItems.length} ${parsedRequestedItems.length === 1 ? 'item' : 'items'} worden aangemaakt.`}
+                </p>
+              </div>
+            )}
+            <div className="space-y-1">
+              <label className="text-sm font-medium" htmlFor="decision-notes">
+                Interne notities (optioneel)
+              </label>
+              <Textarea
+                id="decision-notes"
+                data-testid="decision-notes"
+                placeholder="Typ hier uw motivatie of notities..."
+                value={decisionNotes}
+                onChange={e => setDecisionNotes(e.target.value)}
+                rows={4}
+              />
+            </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setIsDecisionDialogOpen(false)}>Annuleren</Button>
-            <Button 
+            <Button variant="outline" onClick={() => setIsDecisionDialogOpen(false)} disabled={decisionMutation.isPending}>Annuleren</Button>
+            <Button
               variant={decisionType === 'reject' ? 'destructive' : 'default'}
               className={decisionType === 'approve' ? 'bg-green-600 hover:bg-green-700' : ''}
               onClick={handleDecision}
-              disabled={decisionMutation.isPending}
+              data-testid="button-confirm-decision"
+              disabled={
+                decisionMutation.isPending ||
+                (decisionType === 'request_additional_info' && parsedRequestedItems.length === 0)
+              }
             >
               {decisionMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
               Bevestig Besluit
