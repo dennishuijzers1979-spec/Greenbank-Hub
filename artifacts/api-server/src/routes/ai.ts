@@ -75,7 +75,7 @@ router.post(
       action: "prevalidation_run",
       description: "Pre-validatie uitgevoerd.",
     });
-    res.json(serializeRun(run));
+    res.json(serializeRunForProspect(run));
   },
 );
 
@@ -119,7 +119,7 @@ router.post(
       action: "ai_analysis_run",
       description: "Volledige AI-analyse uitgevoerd.",
     });
-    res.json(serializeRun(run));
+    res.json(serializeRunForProspect(run));
   },
 );
 
