@@ -77,31 +77,10 @@ router.post("/dossiers/:dossierId/submissions", requireAuth(["loan_officer", "ad
     res.status(404).json({ error: "Dossier niet gevonden" });
     return;
   }
-  const [row] = await db
-    .select()
-    .from(dossiersTable)
-    .innerJoin(prospectProfilesTable, eq(prospectProfilesTable.id, dossiersTable.prospectId))
-    .where(eq(dossiersTable.id, params.data.dossierId))
-    .limit(1);
-  if (!row) {
-    res.status(404).json({ error: "Dossier niet gevonden" });
-    return;
-  }
-  // Status guard — only dossiers explicitly approved by a loan officer
-  // (and not yet sent to partners) may be submitted.
-  if (!SUBMITTABLE_STATUSES.has(row.dossiers.status)) {
-    res.status(409).json({
-      error: "Indienen niet mogelijk",
-      message:
-        row.dossiers.status === "submitted_to_partners" ||
-        row.dossiers.status === "partner_response_received"
-          ? "Dit dossier is al aangeboden aan partners."
-          : `Dit dossier (status \"${row.dossiers.status}\") is nog niet goedgekeurd voor partneraanbod door de kredietacceptant.`,
-    });
-    return;
-  }
 
   // Resolve partners and validate every requested ID exists and is active.
+  // (Partner validation runs outside the dossier transaction — partners are
+  // independent of the dossier and read-only here.)
   const partners = await db
     .select()
     .from(partnerFinanciersTable)
@@ -126,79 +105,161 @@ router.post("/dossiers/:dossierId/submissions", requireAuth(["loan_officer", "ad
     return;
   }
 
-  const requestedAmount = Number(row.dossiers.requestedAmount ?? 0);
-  const packageSummaryBase = `Dossier ${row.prospect_profiles.companyName} — €${requestedAmount.toLocaleString(
-    "nl-NL",
-  )} (${row.dossiers.financingPurpose ?? "doel onbekend"})`;
+  // Atomic critical section: lock the dossier row, re-check status, insert
+  // submissions, and flip dossier status — all in one transaction. This
+  // prevents two concurrent requests from both passing the status guard
+  // and creating duplicate PartnerSubmission rows.
+  type EmailJob = {
+    partnerEmail: string;
+    partnerName: string;
+    companyName: string;
+    requestedAmount: number;
+    financingPurpose: string | null;
+    aiVerdict: string | null;
+    outOfRange: boolean;
+    min: number | null;
+    max: number | null;
+  };
+  type TxResult =
+    | {
+        ok: true;
+        inserts: ReturnType<typeof serializeSubmission>[];
+        ticketWarnings: string[];
+        previousStatus: string;
+        emailJobs: EmailJob[];
+      }
+    | { ok: false; httpStatus: number; payload: { error: string; message?: string } };
 
-  // Insert one PartnerSubmission per selected partner. Mock-send only —
-  // SendGrid/Pipedrive failures must NEVER block the persisted record.
-  const inserts = [];
-  const mockTicketWarnings: string[] = [];
-  for (const partner of partners) {
-    const min = partner.minimumTicketSize !== null ? Number(partner.minimumTicketSize) : null;
-    const max = partner.maximumTicketSize !== null ? Number(partner.maximumTicketSize) : null;
-    const outOfRange =
-      requestedAmount > 0 &&
-      ((min !== null && requestedAmount < min) ||
-        (max !== null && requestedAmount > max));
-    if (outOfRange) {
-      mockTicketWarnings.push(
-        `${partner.name} (€${(min ?? 0).toLocaleString("nl-NL")}–€${(max ?? 0).toLocaleString("nl-NL")})`,
-      );
-    }
-    const packageSummary =
-      packageSummaryBase + (outOfRange ? " — LET OP: bedrag valt buiten ticket-range partner" : "");
-    const [s] = await db
-      .insert(partnerSubmissionsTable)
-      .values({
-        dossierId: params.data.dossierId,
-        partnerId: partner.id,
-        status: "submitted_mock",
-        submittedAt: new Date(),
-        packageSummary,
-        usedMockMode: true,
+  const txResult = await db.transaction<TxResult>(async (tx) => {
+    const [row] = await tx
+      .select({
+        dossier: dossiersTable,
+        companyName: prospectProfilesTable.companyName,
       })
-      .returning();
+      .from(dossiersTable)
+      .innerJoin(prospectProfilesTable, eq(prospectProfilesTable.id, dossiersTable.prospectId))
+      .where(eq(dossiersTable.id, params.data.dossierId))
+      .for("update")
+      .limit(1);
+    if (!row) {
+      return { ok: false, httpStatus: 404, payload: { error: "Dossier niet gevonden" } };
+    }
+    if (!SUBMITTABLE_STATUSES.has(row.dossier.status)) {
+      return {
+        ok: false,
+        httpStatus: 409,
+        payload: {
+          error: "Indienen niet mogelijk",
+          message:
+            row.dossier.status === "submitted_to_partners" ||
+            row.dossier.status === "partner_response_received"
+              ? "Dit dossier is al aangeboden aan partners."
+              : `Dit dossier (status \"${row.dossier.status}\") is nog niet goedgekeurd voor partneraanbod door de kredietacceptant.`,
+        },
+      };
+    }
+
+    const requestedAmount = Number(row.dossier.requestedAmount ?? 0);
+    const packageSummaryBase = `Dossier ${row.companyName} — €${requestedAmount.toLocaleString(
+      "nl-NL",
+    )} (${row.dossier.financingPurpose ?? "doel onbekend"})`;
+
+    const inserts: ReturnType<typeof serializeSubmission>[] = [];
+    const ticketWarnings: string[] = [];
+    const emailJobs: EmailJob[] = [];
+    for (const partner of partners) {
+      const min = partner.minimumTicketSize !== null ? Number(partner.minimumTicketSize) : null;
+      const max = partner.maximumTicketSize !== null ? Number(partner.maximumTicketSize) : null;
+      const outOfRange =
+        requestedAmount > 0 &&
+        ((min !== null && requestedAmount < min) ||
+          (max !== null && requestedAmount > max));
+      if (outOfRange) {
+        ticketWarnings.push(
+          `${partner.name} (€${(min ?? 0).toLocaleString("nl-NL")}–€${(max ?? 0).toLocaleString("nl-NL")})`,
+        );
+      }
+      const packageSummary =
+        packageSummaryBase + (outOfRange ? " — LET OP: bedrag valt buiten ticket-range partner" : "");
+      const [s] = await tx
+        .insert(partnerSubmissionsTable)
+        .values({
+          dossierId: params.data.dossierId,
+          partnerId: partner.id,
+          status: "submitted_mock",
+          submittedAt: new Date(),
+          packageSummary,
+          usedMockMode: true,
+        })
+        .returning();
+      inserts.push(serializeSubmission(s, partner.name));
+      emailJobs.push({
+        partnerEmail: partner.contactEmail,
+        partnerName: partner.name,
+        companyName: row.companyName,
+        requestedAmount,
+        financingPurpose: row.dossier.financingPurpose,
+        aiVerdict: row.dossier.aiVerdict,
+        outOfRange,
+        min,
+        max,
+      });
+    }
+    await tx
+      .update(dossiersTable)
+      .set({ status: "submitted_to_partners", updatedAt: new Date() })
+      .where(eq(dossiersTable.id, params.data.dossierId));
+    return {
+      ok: true,
+      inserts,
+      ticketWarnings,
+      previousStatus: row.dossier.status,
+      emailJobs,
+    };
+  });
+
+  if (!txResult.ok) {
+    res.status(txResult.httpStatus).json(txResult.payload);
+    return;
+  }
+
+  // Best-effort side effects after the transaction commits. Email failures
+  // must never break the persisted submission, so they're isolated here.
+  for (const job of txResult.emailJobs) {
     try {
       await sendEmail({
-        to: partner.contactEmail,
-        subject: `Nieuwe financieringsaanvraag: ${row.prospect_profiles.companyName}`,
+        to: job.partnerEmail,
+        subject: `Nieuwe financieringsaanvraag: ${job.companyName}`,
         body:
           (body.data.notes ? `${body.data.notes}\n\n` : "") +
-          `Bedrijf: ${row.prospect_profiles.companyName}\n` +
-          `Aangevraagd: €${requestedAmount.toLocaleString("nl-NL")}\n` +
-          `Doel: ${row.dossiers.financingPurpose ?? "n.v.t."}\n` +
-          `AI-verdict: ${row.dossiers.aiVerdict ?? "n.v.t."}\n` +
-          (outOfRange
-            ? `LET OP: bedrag valt buiten uw ticket-range (€${min ?? 0}–€${max ?? 0}).\n`
+          `Bedrijf: ${job.companyName}\n` +
+          `Aangevraagd: €${job.requestedAmount.toLocaleString("nl-NL")}\n` +
+          `Doel: ${job.financingPurpose ?? "n.v.t."}\n` +
+          `AI-verdict: ${job.aiVerdict ?? "n.v.t."}\n` +
+          (job.outOfRange
+            ? `LET OP: bedrag valt buiten uw ticket-range (€${job.min ?? 0}–€${job.max ?? 0}).\n`
             : ""),
       });
     } catch (err) {
-      // Mock or live email failure must not break submission persistence.
       void err;
     }
-    inserts.push(serializeSubmission(s, partner.name));
   }
-  await db
-    .update(dossiersTable)
-    .set({ status: "submitted_to_partners", updatedAt: new Date() })
-    .where(eq(dossiersTable.id, params.data.dossierId));
+
   await logActivity({
     dossierId: params.data.dossierId,
     actor: req.user!,
     action: "submitted_to_partners",
     description: `Dossier verzonden naar ${partners.length} partner(s) (mock).`,
     metadata: {
-      previousStatus: row.dossiers.status,
+      previousStatus: txResult.previousStatus,
       nextStatus: "submitted_to_partners",
       partnerIds: partners.map((p) => p.id),
       partnerNames: partners.map((p) => p.name),
-      ticketRangeWarnings: mockTicketWarnings,
+      ticketRangeWarnings: txResult.ticketWarnings,
       mockSend: true,
     },
   });
-  res.json(inserts);
+  res.json(txResult.inserts);
 });
 
 export default router;

@@ -395,6 +395,30 @@ test("submission persists when SendGrid key is missing (mock email path)", async
   assert.equal(subs[0].status, "submitted_mock");
 });
 
+test("concurrent submissions on the same dossier do not create duplicate rows", async () => {
+  const officer = await createUser("loan_officer");
+  const ctx = await createProspectWithDossier({
+    status: "approved_for_partner_submission",
+    requestedAmount: 100_000,
+  });
+  const p1 = await createPartner({ active: true });
+  const p2 = await createPartner({ active: true });
+  // Fire two requests in parallel — one must win the row-lock and succeed,
+  // the other must observe `submitted_to_partners` and return 409.
+  const [a, b] = await Promise.all([
+    apiPost(`/dossiers/${ctx.dossierId}/submissions`, officer.sessionToken, { partnerIds: [p1, p2] }),
+    apiPost(`/dossiers/${ctx.dossierId}/submissions`, officer.sessionToken, { partnerIds: [p1, p2] }),
+  ]);
+  const statuses = [a.status, b.status].sort();
+  assert.deepEqual(statuses, [200, 409]);
+
+  const subs = await db
+    .select()
+    .from(partnerSubmissionsTable)
+    .where(eq(partnerSubmissionsTable.dossierId, ctx.dossierId));
+  assert.equal(subs.length, 2, "exactly one winner should have inserted 2 rows");
+});
+
 test("ticket-range warning is recorded in activity metadata when amount falls outside partner range", async () => {
   const officer = await createUser("loan_officer");
   const ctx = await createProspectWithDossier({
