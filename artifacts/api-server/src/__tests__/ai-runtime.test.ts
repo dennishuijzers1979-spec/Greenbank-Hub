@@ -97,6 +97,44 @@ function withKwEnv<T>(
     });
 }
 
+/**
+ * Force every skill adapter to mock mode by clearing all provider env
+ * vars + API keys for the duration of `fn`. Used by the cross-adapter
+ * smoke test so it never depends on the host shell's live AI config
+ * (which would otherwise make a real OpenAI call and hang the suite).
+ */
+function withAllSkillsForcedToMock<T>(fn: () => Promise<T> | T): Promise<T> {
+  const keys = [
+    "AI_SKILL_PROVIDER",
+    "OPENAI_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "AI_API_KEY",
+    "AI_SKILL_ENDPOINT",
+    "OPENAI_MODEL",
+    "KW_USE_STRUCTURED_OUTPUTS",
+    DUAL_PROVIDER_ENV,
+    "AI_SKILL_FINANCINGPRODUCTADVISORDUALVIEW_MODEL",
+    KW_PROVIDER_ENV,
+    "AI_SKILL_GEENBANKKREDIETWORKFLOW_MODEL",
+    "AI_SKILL_FINANCINGNEEDASSESSOR_PROVIDER",
+    "AI_SKILL_CREDITPRODUCTADVISOR_PROVIDER",
+    "AI_SKILL_MONEYCAREKREDIETMEMORANDUM_PROVIDER",
+  ];
+  const saved: Record<string, string | undefined> = {};
+  for (const k of keys) {
+    saved[k] = process.env[k];
+    delete process.env[k];
+  }
+  return Promise.resolve()
+    .then(fn)
+    .finally(() => {
+      for (const [k, v] of Object.entries(saved)) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+    });
+}
+
 function withDualEnv<T>(
   env: Record<string, string | undefined>,
   fn: () => Promise<T> | T,
@@ -140,7 +178,37 @@ let baseUrl: string;
 const createdUserIds: string[] = [];
 const createdDossierIds: string[] = [];
 
+// Most tests in this file assert deterministic mock-mode behavior or
+// explicitly opt into a live OpenAI path via the `withDualEnv` / `withKwEnv`
+// helpers (which set + restore env around their own scope). If the host
+// shell happens to have live AI env vars set
+// (OPENAI_API_KEY + per-skill *_PROVIDER=openai), tests that call adapters
+// or `runPrevalidation` directly without their own env wrapper would
+// otherwise make real OpenAI calls and stall the suite. Strip those vars
+// for the lifetime of this test file and restore them in `after`.
+const FILE_AI_ENV_KEYS = [
+  "AI_SKILL_PROVIDER",
+  "OPENAI_API_KEY",
+  "ANTHROPIC_API_KEY",
+  "AI_API_KEY",
+  "AI_SKILL_ENDPOINT",
+  "OPENAI_MODEL",
+  "KW_USE_STRUCTURED_OUTPUTS",
+  "AI_SKILL_FINANCINGPRODUCTADVISORDUALVIEW_PROVIDER",
+  "AI_SKILL_FINANCINGPRODUCTADVISORDUALVIEW_MODEL",
+  "AI_SKILL_GEENBANKKREDIETWORKFLOW_PROVIDER",
+  "AI_SKILL_GEENBANKKREDIETWORKFLOW_MODEL",
+  "AI_SKILL_FINANCINGNEEDASSESSOR_PROVIDER",
+  "AI_SKILL_CREDITPRODUCTADVISOR_PROVIDER",
+  "AI_SKILL_MONEYCAREKREDIETMEMORANDUM_PROVIDER",
+] as const;
+const savedFileAiEnv: Record<string, string | undefined> = {};
+
 before(async () => {
+  for (const k of FILE_AI_ENV_KEYS) {
+    savedFileAiEnv[k] = process.env[k];
+    delete process.env[k];
+  }
   server = createServer(app);
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const addr = server.address() as AddressInfo;
@@ -172,6 +240,10 @@ after(async () => {
     server.close((err) => (err ? reject(err) : resolve())),
   );
   await pool.end();
+  for (const [k, v] of Object.entries(savedFileAiEnv)) {
+    if (v === undefined) delete process.env[k];
+    else process.env[k] = v;
+  }
 });
 
 async function createUser(role: "prospect" | "loan_officer" | "admin") {
@@ -373,44 +445,52 @@ test("every skill adapter emits a structured invocation record", async () => {
     .where(inArray(dossiersTable.id, [dossierId]));
   const ctx = ctxFor(dossier);
 
-  const need = await FinancingNeedAssessorAdapter.run(ctx);
-  const credit = await CreditProductAdvisorAdapter.run(ctx);
-  const dual = await FinancingProductAdvisorDualViewAdapter.run(ctx);
-  const flow = await GeenbankKredietworkflowAdapter.run({
-    ctx,
-    completenessScore: need.data.completenessScore,
-    correctnessScore: credit.data.correctnessScore,
-    viabilityScore: dual.data.viabilityScore,
-    completedDocs: need.data.completedDocs,
-    requiredDocs: need.data.requiredDocs,
-    margin: dual.data.margin,
-    dscr: dual.data.dscr,
-    revenue: dual.data.revenue,
-    profit: dual.data.profit,
-    requested: dual.data.requested,
-  });
-  const fin = await MoneycareKredietmemorandumAdapter.buildFinancierReport({
-    ctx,
-    margin: dual.data.margin,
-    dscr: dual.data.dscr,
-    revenue: dual.data.revenue,
-    profit: dual.data.profit,
-    requested: dual.data.requested,
-    verdict: flow.data.verdict,
-    strongPoints: flow.data.strongPoints,
-    weakPoints: flow.data.weakPoints,
-  });
+  // Force every adapter to its deterministic mock path so this smoke
+  // test never hits the real OpenAI API when the host shell happens
+  // to have live AI env vars set (which would otherwise hang the
+  // whole test file behind a real network call).
+  await withAllSkillsForcedToMock(async () => {
+    const need = await FinancingNeedAssessorAdapter.run(ctx);
+    const credit = await CreditProductAdvisorAdapter.run(ctx);
+    const dual = await FinancingProductAdvisorDualViewAdapter.run(ctx);
+    const flow = await GeenbankKredietworkflowAdapter.run({
+      ctx,
+      completenessScore: need.data.completenessScore,
+      correctnessScore: credit.data.correctnessScore,
+      viabilityScore: dual.data.viabilityScore,
+      completedDocs: need.data.completedDocs,
+      requiredDocs: need.data.requiredDocs,
+      margin: dual.data.margin,
+      dscr: dual.data.dscr,
+      revenue: dual.data.revenue,
+      profit: dual.data.profit,
+      requested: dual.data.requested,
+    });
+    const fin = await MoneycareKredietmemorandumAdapter.buildFinancierReport({
+      ctx,
+      margin: dual.data.margin,
+      dscr: dual.data.dscr,
+      revenue: dual.data.revenue,
+      profit: dual.data.profit,
+      requested: dual.data.requested,
+      verdict: flow.data.verdict,
+      strongPoints: flow.data.strongPoints,
+      weakPoints: flow.data.weakPoints,
+    });
 
-  for (const r of [need, credit, dual, flow, fin]) {
-    assert.ok(r.invocation, `${r.module} missing invocation`);
-    assert.equal(r.invocation.skillName, r.module);
-    assert.ok(typeof r.invocation.durationMs === "number");
-    assert.ok(r.invocation.startedAt);
-    assert.ok(r.invocation.completedAt);
-    assert.ok(["mock", "openai", "http", "replit"].includes(r.invocation.provider));
-    assert.equal(r.invocation.usedMockMode, r.usedMockMode);
-    assert.ok(r.invocation.outputSummary.length > 0);
-  }
+    for (const r of [need, credit, dual, flow, fin]) {
+      assert.ok(r.invocation, `${r.module} missing invocation`);
+      assert.equal(r.invocation.skillName, r.module);
+      assert.ok(typeof r.invocation.durationMs === "number");
+      assert.ok(r.invocation.startedAt);
+      assert.ok(r.invocation.completedAt);
+      assert.ok(
+        ["mock", "openai", "http", "replit"].includes(r.invocation.provider),
+      );
+      assert.equal(r.invocation.usedMockMode, r.usedMockMode);
+      assert.ok(r.invocation.outputSummary.length > 0);
+    }
+  });
 });
 
 // --- Dual-view OpenAI pilot -------------------------------------------------
@@ -1181,29 +1261,35 @@ test("GeenbankKredietworkflow deterministic mock output passes the forward-only 
     .where(inArray(dossiersTable.id, [dossierId]));
   const ctx = ctxFor(dossier);
 
-  const need = await FinancingNeedAssessorAdapter.run(ctx);
-  const credit = await CreditProductAdvisorAdapter.run(ctx);
-  const dual = await FinancingProductAdvisorDualViewAdapter.run(ctx);
-  const flow = await GeenbankKredietworkflowAdapter.run({
-    ctx,
-    completenessScore: need.data.completenessScore,
-    correctnessScore: credit.data.correctnessScore,
-    viabilityScore: dual.data.viabilityScore,
-    completedDocs: need.data.completedDocs,
-    requiredDocs: need.data.requiredDocs,
-    margin: dual.data.margin,
-    dscr: dual.data.dscr,
-    revenue: dual.data.revenue,
-    profit: dual.data.profit,
-    requested: dual.data.requested,
-  });
+  // Force every adapter to its deterministic mock path so this regression
+  // test never hits the real OpenAI API when the host shell has live AI
+  // env vars set (which would otherwise hang the suite on a real network
+  // call).
+  await withAllSkillsForcedToMock(async () => {
+    const need = await FinancingNeedAssessorAdapter.run(ctx);
+    const credit = await CreditProductAdvisorAdapter.run(ctx);
+    const dual = await FinancingProductAdvisorDualViewAdapter.run(ctx);
+    const flow = await GeenbankKredietworkflowAdapter.run({
+      ctx,
+      completenessScore: need.data.completenessScore,
+      correctnessScore: credit.data.correctnessScore,
+      viabilityScore: dual.data.viabilityScore,
+      completedDocs: need.data.completedDocs,
+      requiredDocs: need.data.requiredDocs,
+      margin: dual.data.margin,
+      dscr: dual.data.dscr,
+      revenue: dual.data.revenue,
+      profit: dual.data.profit,
+      requested: dual.data.requested,
+    });
 
-  const problem = validateGeenbankKredietworkflowJson(flow.data);
-  assert.equal(
-    problem,
-    null,
-    `mock adapter output should satisfy the live skill schema: ${problem}`,
-  );
+    const problem = validateGeenbankKredietworkflowJson(flow.data);
+    assert.equal(
+      problem,
+      null,
+      `mock adapter output should satisfy the live skill schema: ${problem}`,
+    );
+  });
 });
 
 test("GeenbankKredietworkflow stays on mock when only OPENAI_API_KEY is set (honesty rule)", async () => {

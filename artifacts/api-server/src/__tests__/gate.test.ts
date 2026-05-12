@@ -50,7 +50,36 @@ let baseUrl: string;
 const createdUserIds: string[] = [];
 const createdDossierIds: string[] = [];
 
+// Gate tests exercise the central submit/run-analysis gate against
+// deterministic mock skill outputs — they assert score thresholds, not
+// live model behavior. If the host shell happens to have live AI env
+// vars set (OPENAI_API_KEY + per-skill *_PROVIDER=openai), the
+// run-analysis endpoint would otherwise make real OpenAI calls during
+// these tests and stall the suite. Clear those vars for the lifetime
+// of this test file and restore them in `after`.
+const AI_ENV_KEYS = [
+  "AI_SKILL_PROVIDER",
+  "OPENAI_API_KEY",
+  "ANTHROPIC_API_KEY",
+  "AI_API_KEY",
+  "AI_SKILL_ENDPOINT",
+  "OPENAI_MODEL",
+  "KW_USE_STRUCTURED_OUTPUTS",
+  "AI_SKILL_FINANCINGPRODUCTADVISORDUALVIEW_PROVIDER",
+  "AI_SKILL_FINANCINGPRODUCTADVISORDUALVIEW_MODEL",
+  "AI_SKILL_GEENBANKKREDIETWORKFLOW_PROVIDER",
+  "AI_SKILL_GEENBANKKREDIETWORKFLOW_MODEL",
+  "AI_SKILL_FINANCINGNEEDASSESSOR_PROVIDER",
+  "AI_SKILL_CREDITPRODUCTADVISOR_PROVIDER",
+  "AI_SKILL_MONEYCAREKREDIETMEMORANDUM_PROVIDER",
+] as const;
+const savedAiEnv: Record<string, string | undefined> = {};
+
 before(async () => {
+  for (const k of AI_ENV_KEYS) {
+    savedAiEnv[k] = process.env[k];
+    delete process.env[k];
+  }
   server = createServer(app);
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const addr = server.address() as AddressInfo;
@@ -83,6 +112,10 @@ after(async () => {
     server.close((err) => (err ? reject(err) : resolve())),
   );
   await pool.end();
+  for (const [k, v] of Object.entries(savedAiEnv)) {
+    if (v === undefined) delete process.env[k];
+    else process.env[k] = v;
+  }
 });
 
 // ---------------------------------------------------------------------------
