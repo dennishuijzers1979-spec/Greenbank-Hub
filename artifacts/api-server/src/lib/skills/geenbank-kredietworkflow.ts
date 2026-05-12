@@ -4,11 +4,17 @@ import {
   type MappedKredietworkflowAppAnalysis,
 } from "./geenbank-kredietworkflow-financier-mapper";
 import {
+  KW_FINANCIER_JSON_SCHEMA,
   normalizeKredietworkflowFinancierPayload,
   validateGeenbankKredietworkflowFinancierJson,
   type GeenbankKredietworkflowFinancierOutput,
 } from "./geenbank-kredietworkflow-financier-schema";
-import { DEFAULT_OPENAI_MODEL, getOpenAIChatClient } from "./openai-client";
+import {
+  DEFAULT_OPENAI_MODEL,
+  getOpenAIChatClient,
+  OpenAIHttpError,
+  type OpenAIChatRequest,
+} from "./openai-client";
 import { failedInvocation, instrumentSkill } from "./runtime";
 import { loadSkillMarkdown } from "./skill-loader";
 import {
@@ -274,6 +280,23 @@ function buildSkillInput(args: GeenbankKredietworkflowInput, borrowerName: strin
   };
 }
 
+/**
+ * Returns true when the env opts the live KW call into Structured
+ * Outputs (`response_format: { type: "json_schema", strict: true }`).
+ *
+ * - `KW_USE_STRUCTURED_OUTPUTS=true` (case-insensitive) → on.
+ * - Anything else (unset, "false", "0", "") → off; we keep the legacy
+ *   `json_object` path plus all defensive normalizers.
+ *
+ * The flag exists as a one-touch rollback to the pre-migration
+ * behaviour without code changes.
+ */
+function structuredOutputsEnabled(): boolean {
+  return (
+    (process.env.KW_USE_STRUCTURED_OUTPUTS ?? "").toLowerCase() === "true"
+  );
+}
+
 async function callOpenAISkill(
   args: GeenbankKredietworkflowInput,
   borrowerName: string,
@@ -293,25 +316,66 @@ async function callOpenAISkill(
   const systemPrompt = loadSkillMarkdown(SKILL_SLUG);
   const userPayload = buildSkillInput(args, borrowerName);
 
-  const client = getOpenAIChatClient();
-  const res = await client.chat(
+  const messages: OpenAIChatRequest["messages"] = [
+    { role: "system", content: systemPrompt },
     {
-      model,
-      temperature: 0,
-      responseFormat: "json_object",
-      messages: [
-        { role: "system", content: systemPrompt },
-        {
-          role: "user",
-          content:
-            "Voer de geenbank-kredietworkflow uit op onderstaande casus volgens de skill-instructies. " +
-            "Geef uitsluitend JSON terug volgens het GeenbankKredietworkflowFinancierOutput-schema.\n\n" +
-            JSON.stringify(userPayload),
-        },
-      ],
+      role: "user",
+      content:
+        "Voer de geenbank-kredietworkflow uit op onderstaande casus volgens de skill-instructies. " +
+        "Geef uitsluitend JSON terug volgens het GeenbankKredietworkflowFinancierOutput-schema.\n\n" +
+        JSON.stringify(userPayload),
     },
-    { apiKey },
-  );
+  ];
+
+  const client = getOpenAIChatClient();
+  const useStructured = structuredOutputsEnabled();
+
+  // Primary call — structured outputs if enabled, else legacy json_object.
+  let res;
+  try {
+    res = await client.chat(
+      {
+        model,
+        temperature: 0,
+        responseFormat: useStructured
+          ? {
+              type: "json_schema",
+              schema: {
+                name: "GeenbankKredietworkflowFinancierOutput",
+                schema: KW_FINANCIER_JSON_SCHEMA,
+                strict: true,
+              },
+            }
+          : "json_object",
+        messages,
+      },
+      { apiKey },
+    );
+  } catch (err) {
+    // If the model/API rejects `json_schema` with HTTP 400, retry once
+    // with the legacy `json_object` path. The defensive normalizer
+    // chain still guards that path. We do NOT silently downgrade on
+    // any other error — those propagate so the adapter falls back to
+    // the deterministic mock with a structured fallbackReason.
+    const isUnsupportedSchema =
+      useStructured &&
+      err instanceof OpenAIHttpError &&
+      err.status === 400;
+    if (!isUnsupportedSchema) throw err;
+    logger.warn(
+      { skill: MODULE, status: err.status, error: err.message },
+      "[skill] structured outputs rejected (HTTP 400) — retrying with json_object",
+    );
+    res = await client.chat(
+      {
+        model,
+        temperature: 0,
+        responseFormat: "json_object",
+        messages,
+      },
+      { apiKey },
+    );
+  }
 
   let parsed: unknown;
   try {

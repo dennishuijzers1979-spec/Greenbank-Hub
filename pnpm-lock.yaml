@@ -215,6 +215,9 @@ importers:
       '@types/node':
         specifier: 'catalog:'
         version: 25.3.5
+      ajv:
+        specifier: ^8.18.0
+        version: 8.18.0
       esbuild:
         specifier: 0.27.3
         version: 0.27.3

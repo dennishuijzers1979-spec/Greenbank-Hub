@@ -1290,3 +1290,329 @@ export function validateGeenbankKredietworkflowFinancierJson(
 
   return null;
 }
+
+// --- OpenAI Structured Outputs JSON Schema ---------------------------------
+//
+// Hand-written JSON Schema that mirrors `validateGeenbankKredietworkflow
+// FinancierJson` 1-on-1 and conforms to OpenAI Structured Outputs strict
+// mode (`response_format: { type: "json_schema", strict: true }`). Strict
+// mode requires:
+//
+//   * Every object MUST have `additionalProperties: false`.
+//   * Every key declared on an object MUST appear in `required`. We
+//     therefore model nullable fields as `{ "type": ["T", "null"] }`
+//     instead of dropping them from `required` — matching the
+//     validator's `isNullableFiniteNumber` / `optional ?? null` shape.
+//
+// This constant is the source of truth handed to the live OpenAI call
+// in `geenbank-kredietworkflow.ts`. Parity with the TS validator is
+// guarded by the `KW_FINANCIER_JSON_SCHEMA / validator parity` tests
+// in `ai-runtime.test.ts` — keep both in lock-step or those break.
+//
+// We intentionally do NOT pull in zod/typebox/etc. to derive this
+// schema: the repo keeps validators dependency-free, and a hand-
+// written schema makes the strict-mode invariants explicit and
+// reviewable.
+
+const STRUCTURE_SCHEMA: Record<string, unknown> = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "facilityType",
+    "amount",
+    "rate",
+    "rateComment",
+    "tenor",
+    "repaymentProfile",
+    "purpose",
+  ],
+  properties: {
+    facilityType: { type: "string", minLength: 1 },
+    amount: { type: ["number", "null"] },
+    rate: { type: ["number", "null"] },
+    rateComment: { type: ["string", "null"] },
+    tenor: { type: ["string", "null"] },
+    repaymentProfile: { type: ["string", "null"] },
+    purpose: { type: ["string", "null"] },
+  },
+};
+
+const COMMERCIAL_PROPOSAL_SCHEMA: Record<string, unknown> = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "summary",
+    "structure",
+    "fees",
+    "collateralPackage",
+    "covenantPackage",
+    "monitoringCadence",
+    "conditionsPrecedent",
+    "eventsOfDefault",
+  ],
+  properties: {
+    summary: { type: "string", minLength: 1 },
+    structure: STRUCTURE_SCHEMA,
+    fees: { type: ["string", "null"] },
+    collateralPackage: { type: "array", items: { type: "string" } },
+    covenantPackage: { type: "array", items: { type: "string" } },
+    monitoringCadence: { type: ["string", "null"] },
+    conditionsPrecedent: { type: "array", items: { type: "string" } },
+    eventsOfDefault: { type: "array", items: { type: "string" } },
+  },
+};
+
+const SEVERITY_ENUM = { type: "string", enum: ["blocking", "advisory"] };
+
+export const KW_FINANCIER_JSON_SCHEMA: Record<string, unknown> = {
+  $schema: "http://json-schema.org/draft-07/schema#",
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "decision",
+    "decisionRationale",
+    "feasibilityAssessment",
+    "borrower",
+    "requestedStructure",
+    "recommendedStructure",
+    "riskAnalysis",
+    "commercialProposal",
+    "validationFindings",
+    "creditReport",
+    "termSheet",
+    "conditions",
+    "riskFlags",
+    "securities",
+    "pricingIndication",
+    "confidenceScore",
+    "creditWorkflowContext",
+  ],
+  properties: {
+    decision: { type: "string", enum: ["Go", "Conditional Go", "No Go"] },
+    decisionRationale: { type: "string", minLength: 1 },
+    feasibilityAssessment: {
+      type: "string",
+      enum: [
+        "haalbaar zoals aangevraagd",
+        "haalbaar onder voorwaarden",
+        "niet haalbaar zoals aangevraagd",
+      ],
+    },
+    borrower: {
+      type: "object",
+      additionalProperties: false,
+      required: ["name", "kvkNumber", "description"],
+      properties: {
+        name: { type: "string", minLength: 1 },
+        kvkNumber: { type: ["string", "null"] },
+        description: { type: ["string", "null"] },
+      },
+    },
+    requestedStructure: STRUCTURE_SCHEMA,
+    recommendedStructure: STRUCTURE_SCHEMA,
+    riskAnalysis: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "summary",
+        "metrics",
+        "stressCase",
+        "keyRisks",
+        "mitigants",
+        "assumptions",
+      ],
+      properties: {
+        summary: { type: "string", minLength: 1 },
+        metrics: {
+          type: "object",
+          additionalProperties: false,
+          required: ["dscr", "solvency", "ltv", "netWorkingCapital"],
+          properties: {
+            dscr: { type: ["number", "null"] },
+            solvency: { type: ["number", "null"] },
+            ltv: { type: ["number", "null"] },
+            netWorkingCapital: { type: ["number", "null"] },
+          },
+        },
+        stressCase: { type: ["string", "null"] },
+        keyRisks: { type: "array", items: { type: "string" } },
+        mitigants: { type: "array", items: { type: "string" } },
+        assumptions: { type: "array", items: { type: "string" } },
+      },
+    },
+    commercialProposal: COMMERCIAL_PROPOSAL_SCHEMA,
+    validationFindings: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "summary",
+        "blockingFindings",
+        "advisoryFindings",
+        "recalculatedMetrics",
+        "consistencyIssues",
+      ],
+      properties: {
+        summary: { type: "string", minLength: 1 },
+        blockingFindings: { type: "array", items: { type: "string" } },
+        advisoryFindings: { type: "array", items: { type: "string" } },
+        recalculatedMetrics: {
+          anyOf: [
+            { type: "null" },
+            {
+              type: "object",
+              additionalProperties: false,
+              required: ["dscr", "ltv", "solvency"],
+              properties: {
+                dscr: { type: ["number", "null"] },
+                ltv: { type: ["number", "null"] },
+                solvency: { type: ["number", "null"] },
+              },
+            },
+          ],
+        },
+        consistencyIssues: { type: "array", items: { type: "string" } },
+      },
+    },
+    creditReport: {
+      type: "object",
+      additionalProperties: false,
+      required: ["headline", "summary", "sections", "docxArtifactRef"],
+      properties: {
+        headline: { type: "string", minLength: 1 },
+        summary: { type: "string", minLength: 1 },
+        sections: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: ["title", "body"],
+            properties: {
+              title: { type: "string", minLength: 1 },
+              body: { type: "string" },
+            },
+          },
+        },
+        docxArtifactRef: { type: ["string", "null"] },
+      },
+    },
+    termSheet: COMMERCIAL_PROPOSAL_SCHEMA,
+    conditions: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["id", "category", "severity", "description", "prefunding"],
+        properties: {
+          id: { type: "string", minLength: 1 },
+          category: { type: "string", minLength: 1 },
+          severity: SEVERITY_ENUM,
+          description: { type: "string", minLength: 1 },
+          prefunding: { type: ["boolean", "null"] },
+        },
+      },
+    },
+    riskFlags: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["id", "category", "severity", "description"],
+        properties: {
+          id: { type: "string", minLength: 1 },
+          category: { type: "string", minLength: 1 },
+          severity: SEVERITY_ENUM,
+          description: { type: "string", minLength: 1 },
+        },
+      },
+    },
+    securities: {
+      type: "object",
+      additionalProperties: false,
+      required: ["items", "totalMarketValue", "totalForcedSaleValue", "ltv"],
+      properties: {
+        items: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: [
+              "type",
+              "description",
+              "marketValue",
+              "forcedSaleValue",
+              "ranking",
+              "enforceabilityNotes",
+            ],
+            properties: {
+              type: { type: "string", minLength: 1 },
+              description: { type: "string", minLength: 1 },
+              marketValue: { type: ["number", "null"] },
+              forcedSaleValue: { type: ["number", "null"] },
+              ranking: { type: ["string", "null"] },
+              enforceabilityNotes: { type: ["string", "null"] },
+            },
+          },
+        },
+        totalMarketValue: { type: ["number", "null"] },
+        totalForcedSaleValue: { type: ["number", "null"] },
+        ltv: { type: ["number", "null"] },
+      },
+    },
+    pricingIndication: {
+      type: "object",
+      additionalProperties: false,
+      required: ["components", "grandTotalMonthlyRate", "notes"],
+      properties: {
+        components: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: ["product", "contribution", "monthlyRate", "matrixBand"],
+            properties: {
+              product: { type: "string", minLength: 1 },
+              contribution: { type: ["number", "null"] },
+              monthlyRate: { type: ["number", "null"] },
+              matrixBand: { type: ["string", "null"] },
+            },
+          },
+        },
+        grandTotalMonthlyRate: { type: ["number", "null"] },
+        notes: { type: ["string", "null"] },
+      },
+    },
+    confidenceScore: { type: "number", minimum: 0, maximum: 100 },
+    creditWorkflowContext: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "decision",
+        "feasibilityAssessment",
+        "recommendedStructureSummary",
+        "termSheetSummary",
+        "pricingSummary",
+        "blockingConditions",
+        "advisoryConditions",
+        "riskFlags",
+      ],
+      properties: {
+        decision: { type: "string", enum: ["Go", "Conditional Go", "No Go"] },
+        feasibilityAssessment: {
+          type: "string",
+          enum: [
+            "haalbaar zoals aangevraagd",
+            "haalbaar onder voorwaarden",
+            "niet haalbaar zoals aangevraagd",
+          ],
+        },
+        recommendedStructureSummary: { type: "string" },
+        termSheetSummary: { type: "string" },
+        pricingSummary: { type: "string" },
+        blockingConditions: { type: "array", items: { type: "string" } },
+        advisoryConditions: { type: "array", items: { type: "string" } },
+        riskFlags: { type: "array", items: { type: "string" } },
+      },
+    },
+  },
+};
+

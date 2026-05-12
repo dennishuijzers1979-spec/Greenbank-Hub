@@ -51,12 +51,18 @@ import {
   type GeenbankKredietworkflowSkillResponse,
 } from "../lib/skills/geenbank-kredietworkflow-schema";
 import {
+  KW_FINANCIER_JSON_SCHEMA,
   normalizeKredietworkflowFinancierPayload,
   validateGeenbankKredietworkflowFinancierJson,
   GEENBANK_KREDIETWORKFLOW_DECISIONS,
   GEENBANK_KREDIETWORKFLOW_FEASIBILITIES,
   type GeenbankKredietworkflowFinancierOutput,
 } from "../lib/skills/geenbank-kredietworkflow-financier-schema";
+import {
+  buildOpenAIRequestBody,
+  OpenAIHttpError,
+} from "../lib/skills/openai-client";
+import Ajv from "ajv";
 import { mapKredietworkflowFinancierOutputToAppAnalysis } from "../lib/skills/geenbank-kredietworkflow-financier-mapper";
 
 const DUAL_PROVIDER_ENV = "AI_SKILL_FINANCINGPRODUCTADVISORDUALVIEW_PROVIDER";
@@ -72,6 +78,7 @@ function withKwEnv<T>(
     "OPENAI_MODEL",
     "AI_SKILL_PROVIDER",
     "AI_SKILL_GEENBANKKREDIETWORKFLOW_MODEL",
+    "KW_USE_STRUCTURED_OUTPUTS",
   ];
   const saved: Record<string, string | undefined> = {};
   for (const k of keys) saved[k] = process.env[k];
@@ -1245,6 +1252,7 @@ function buildFinancierSample(
       facilityType: "Annuïteitenlening",
       amount: 250000,
       rate: 0.069,
+      rateComment: null,
       tenor: "60 mnd",
       repaymentProfile: "annuïtair",
       purpose: "groei en werkkapitaal",
@@ -1253,6 +1261,7 @@ function buildFinancierSample(
       facilityType: "Annuïteitenlening",
       amount: 250000,
       rate: 0.069,
+      rateComment: null,
       tenor: "60 mnd",
       repaymentProfile: "annuïtair",
       purpose: "groei en werkkapitaal",
@@ -1274,6 +1283,7 @@ function buildFinancierSample(
         facilityType: "Annuïteitenlening",
         amount: 250000,
         rate: 0.069,
+        rateComment: null,
         tenor: "60 mnd",
         repaymentProfile: "annuïtair",
         purpose: "groei en werkkapitaal",
@@ -1307,6 +1317,7 @@ function buildFinancierSample(
         facilityType: "Annuïteitenlening",
         amount: 250000,
         rate: 0.069,
+        rateComment: null,
         tenor: "60 mnd",
         repaymentProfile: "annuïtair",
         purpose: "groei en werkkapitaal",
@@ -3803,6 +3814,365 @@ test("dual-view adapter remains live-capable with its own per-skill provider env
         assert.equal(r.usedMockMode, false);
         assert.equal(r.invocation.provider, "openai");
         assert.equal(r.invocation.model, "gpt-4o-mini");
+      },
+    );
+  } finally {
+    setOpenAIChatClientForTesting(null);
+  }
+});
+
+// --- KW Structured Outputs (json_schema) ----------------------------------
+//
+// Tests that lock in the live OpenAI Structured Outputs migration:
+//
+// 1. KW_FINANCIER_JSON_SCHEMA compiles in ajv (= valid JSON Schema).
+// 2. Schema accepts the same happy fixture the TS validator accepts.
+// 3. Schema rejects the same four core mutations the TS validator
+//    rejects (decision-out-of-enum, missing/empty creditReport.headline,
+//    non-string creditReport.sections[*].body, non-array conditions).
+// 4. `buildOpenAIRequestBody` serialises a json_schema responseFormat to
+//    `{ type: "json_schema", json_schema: { name, schema, strict: true } }`
+//    on the wire body.
+// 5. With KW_USE_STRUCTURED_OUTPUTS=true and a fake client returning a
+//    valid fixture, the live KW path succeeds without normalizer fallback.
+// 6. Regression: defensive `normalizeStructureRate` still runs through
+//    the structured-outputs path — a fake client returning rate:"8,5%"
+//    is normalized to a number and the call still succeeds.
+// 7. With KW_USE_STRUCTURED_OUTPUTS=true and the fake client throwing
+//    `OpenAIHttpError(400, ...)` on the first call, the adapter retries
+//    once with `responseFormat: "json_object"` and the live path still
+//    succeeds (= the documented unsupported-model fallback).
+
+test("KW_FINANCIER_JSON_SCHEMA: ajv compiles the schema", () => {
+  const ajv = new Ajv({ allErrors: false, strict: false });
+  const validate = ajv.compile(KW_FINANCIER_JSON_SCHEMA);
+  assert.equal(typeof validate, "function");
+});
+
+test("KW_FINANCIER_JSON_SCHEMA: accepts the happy fixture (parity with TS validator)", () => {
+  const ajv = new Ajv({ allErrors: false, strict: false });
+  const validate = ajv.compile(KW_FINANCIER_JSON_SCHEMA);
+  const sample = buildFinancierSample();
+  // Sanity: TS validator agrees.
+  assert.equal(validateGeenbankKredietworkflowFinancierJson(sample), null);
+  const ok = validate(sample);
+  assert.equal(
+    ok,
+    true,
+    `JSON schema rejected the happy fixture: ${JSON.stringify(validate.errors)}`,
+  );
+});
+
+test("KW_FINANCIER_JSON_SCHEMA: rejects invalid decision (parity)", () => {
+  const ajv = new Ajv({ allErrors: false, strict: false });
+  const validate = ajv.compile(KW_FINANCIER_JSON_SCHEMA);
+  const bad = { ...buildFinancierSample(), decision: "Maybe" };
+  assert.notEqual(
+    validateGeenbankKredietworkflowFinancierJson(bad),
+    null,
+    "TS validator should reject invalid decision",
+  );
+  assert.equal(validate(bad), false);
+});
+
+test("KW_FINANCIER_JSON_SCHEMA: rejects missing/empty creditReport.headline (parity)", () => {
+  const ajv = new Ajv({ allErrors: false, strict: false });
+  const validate = ajv.compile(KW_FINANCIER_JSON_SCHEMA);
+  const sample = buildFinancierSample();
+  const bad = {
+    ...sample,
+    creditReport: { ...sample.creditReport, headline: "" },
+  };
+  assert.notEqual(
+    validateGeenbankKredietworkflowFinancierJson(bad),
+    null,
+    "TS validator should reject empty headline",
+  );
+  assert.equal(validate(bad), false);
+});
+
+test("KW_FINANCIER_JSON_SCHEMA: rejects non-string creditReport.sections[*].body (parity)", () => {
+  const ajv = new Ajv({ allErrors: false, strict: false });
+  const validate = ajv.compile(KW_FINANCIER_JSON_SCHEMA);
+  const sample = buildFinancierSample();
+  const bad = {
+    ...sample,
+    creditReport: {
+      ...sample.creditReport,
+      sections: [{ title: "Risico", body: 42 as unknown as string }],
+    },
+  };
+  assert.notEqual(
+    validateGeenbankKredietworkflowFinancierJson(bad),
+    null,
+    "TS validator should reject non-string section body",
+  );
+  assert.equal(validate(bad), false);
+});
+
+test("KW_FINANCIER_JSON_SCHEMA: rejects non-array conditions (parity)", () => {
+  const ajv = new Ajv({ allErrors: false, strict: false });
+  const validate = ajv.compile(KW_FINANCIER_JSON_SCHEMA);
+  const bad = {
+    ...buildFinancierSample(),
+    conditions: "geen condities" as unknown as never[],
+  };
+  assert.notEqual(
+    validateGeenbankKredietworkflowFinancierJson(bad),
+    null,
+    "TS validator should reject non-array conditions",
+  );
+  assert.equal(validate(bad), false);
+});
+
+test("buildOpenAIRequestBody serialises json_schema responseFormat correctly", () => {
+  const body = buildOpenAIRequestBody({
+    model: "gpt-4o-mini",
+    temperature: 0,
+    responseFormat: {
+      type: "json_schema",
+      schema: {
+        name: "GeenbankKredietworkflowFinancierOutput",
+        schema: KW_FINANCIER_JSON_SCHEMA,
+        strict: true,
+      },
+    },
+    messages: [{ role: "user", content: "hi" }],
+  });
+  assert.deepEqual(body.response_format, {
+    type: "json_schema",
+    json_schema: {
+      name: "GeenbankKredietworkflowFinancierOutput",
+      schema: KW_FINANCIER_JSON_SCHEMA,
+      strict: true,
+    },
+  });
+  assert.equal(body.model, "gpt-4o-mini");
+  assert.equal(body.temperature, 0);
+});
+
+test("buildOpenAIRequestBody json_object form is unchanged (backward compat)", () => {
+  const body = buildOpenAIRequestBody({
+    model: "gpt-4o-mini",
+    responseFormat: "json_object",
+    messages: [{ role: "user", content: "hi" }],
+  });
+  assert.deepEqual(body.response_format, { type: "json_object" });
+});
+
+test("kredietworkflow live path with KW_USE_STRUCTURED_OUTPUTS=true sends json_schema and succeeds", async () => {
+  const { dossierId } = await createDossier();
+  const [dossier] = await db
+    .select()
+    .from(dossiersTable)
+    .where(inArray(dossiersTable.id, [dossierId]));
+  let observedResponseFormat: unknown = undefined;
+  setOpenAIChatClientForTesting({
+    async chat(req) {
+      observedResponseFormat = req.responseFormat;
+      return {
+        content: JSON.stringify(buildFinancierSample()),
+        model: "gpt-4o-mini-2024-07-18",
+      };
+    },
+  });
+  try {
+    await withKwEnv(
+      {
+        [KW_PROVIDER_ENV]: "openai",
+        OPENAI_API_KEY: "sk-test-fake-1234567890",
+        KW_USE_STRUCTURED_OUTPUTS: "true",
+      },
+      async () => {
+        const r = await GeenbankKredietworkflowAdapter.run(buildKwArgs(dossier));
+        assert.equal(r.ok, true);
+        assert.equal(r.usedMockMode, false);
+        assert.equal(r.invocation.usedMockMode, false);
+        assert.equal(r.invocation.provider, "openai");
+        assert.equal(r.invocation.fallbackReason, null);
+        const extras = r.invocation.extras as { canonical?: unknown } | null;
+        assert.ok(extras && extras.canonical, "extras.canonical missing");
+        // The adapter MUST have asked the client for json_schema.
+        assert.ok(
+          typeof observedResponseFormat === "object" &&
+            observedResponseFormat !== null &&
+            (observedResponseFormat as { type?: string }).type === "json_schema",
+          `expected json_schema responseFormat, got ${JSON.stringify(observedResponseFormat)}`,
+        );
+        const rf = observedResponseFormat as {
+          schema: { name: string; strict: boolean };
+        };
+        assert.equal(rf.schema.name, "GeenbankKredietworkflowFinancierOutput");
+        assert.equal(rf.schema.strict, true);
+      },
+    );
+  } finally {
+    setOpenAIChatClientForTesting(null);
+  }
+});
+
+test("kredietworkflow structured-outputs path still applies defensive normalizers (rate string)", async () => {
+  const { dossierId } = await createDossier();
+  const [dossier] = await db
+    .select()
+    .from(dossiersTable)
+    .where(inArray(dossiersTable.id, [dossierId]));
+  // Simulate a model that, despite strict json_schema, somehow emits a
+  // rate-as-string. Defensive normalizer must coerce it before validation.
+  const sample = buildFinancierSample();
+  const payload = JSON.parse(JSON.stringify(sample)) as Record<string, unknown>;
+  (payload.requestedStructure as Record<string, unknown>).rate = "8,5%";
+  (payload.recommendedStructure as Record<string, unknown>).rate = "8,5%";
+  ((payload.commercialProposal as Record<string, unknown>).structure as Record<
+    string,
+    unknown
+  >).rate = "8,5%";
+  ((payload.termSheet as Record<string, unknown>).structure as Record<
+    string,
+    unknown
+  >).rate = "8,5%";
+  setOpenAIChatClientForTesting(
+    makeFakeOpenAI(() => ({
+      content: JSON.stringify(payload),
+      model: "gpt-4o-mini-2024-07-18",
+    })),
+  );
+  try {
+    await withKwEnv(
+      {
+        [KW_PROVIDER_ENV]: "openai",
+        OPENAI_API_KEY: "sk-test-fake-1234567890",
+        KW_USE_STRUCTURED_OUTPUTS: "true",
+      },
+      async () => {
+        const r = await GeenbankKredietworkflowAdapter.run(buildKwArgs(dossier));
+        assert.equal(r.ok, true);
+        assert.equal(r.usedMockMode, false);
+        assert.equal(r.invocation.fallbackReason, null);
+        const extras = r.invocation.extras as
+          | { canonical?: GeenbankKredietworkflowFinancierOutput }
+          | null;
+        assert.equal(extras?.canonical?.requestedStructure.rate, 8.5);
+      },
+    );
+  } finally {
+    setOpenAIChatClientForTesting(null);
+  }
+});
+
+test("kredietworkflow retries with json_object on HTTP 400 from json_schema (unsupported-model fallback)", async () => {
+  const { dossierId } = await createDossier();
+  const [dossier] = await db
+    .select()
+    .from(dossiersTable)
+    .where(inArray(dossiersTable.id, [dossierId]));
+  const observedFormats: unknown[] = [];
+  let calls = 0;
+  setOpenAIChatClientForTesting({
+    async chat(req) {
+      calls += 1;
+      observedFormats.push(req.responseFormat);
+      if (calls === 1) {
+        throw new OpenAIHttpError(
+          400,
+          "OpenAI HTTP 400 Bad Request: response_format json_schema not supported",
+        );
+      }
+      return {
+        content: JSON.stringify(buildFinancierSample()),
+        model: "gpt-5.2-fake",
+      };
+    },
+  });
+  try {
+    await withKwEnv(
+      {
+        [KW_PROVIDER_ENV]: "openai",
+        OPENAI_API_KEY: "sk-test-fake-1234567890",
+        KW_USE_STRUCTURED_OUTPUTS: "true",
+      },
+      async () => {
+        const r = await GeenbankKredietworkflowAdapter.run(buildKwArgs(dossier));
+        assert.equal(r.ok, true);
+        assert.equal(r.usedMockMode, false);
+        assert.equal(r.invocation.fallbackReason, null);
+        assert.equal(calls, 2);
+        assert.ok(
+          typeof observedFormats[0] === "object" &&
+            (observedFormats[0] as { type?: string })?.type === "json_schema",
+        );
+        assert.equal(observedFormats[1], "json_object");
+      },
+    );
+  } finally {
+    setOpenAIChatClientForTesting(null);
+  }
+});
+
+test("kredietworkflow does NOT retry on non-400 errors from structured outputs path", async () => {
+  const { dossierId } = await createDossier();
+  const [dossier] = await db
+    .select()
+    .from(dossiersTable)
+    .where(inArray(dossiersTable.id, [dossierId]));
+  let calls = 0;
+  setOpenAIChatClientForTesting({
+    async chat() {
+      calls += 1;
+      throw new OpenAIHttpError(503, "OpenAI HTTP 503 Service Unavailable");
+    },
+  });
+  try {
+    await withKwEnv(
+      {
+        [KW_PROVIDER_ENV]: "openai",
+        OPENAI_API_KEY: "sk-test-fake-1234567890",
+        KW_USE_STRUCTURED_OUTPUTS: "true",
+      },
+      async () => {
+        const r = await GeenbankKredietworkflowAdapter.run(buildKwArgs(dossier));
+        assert.equal(r.usedMockMode, true);
+        assert.equal(calls, 1);
+        assert.ok(
+          r.invocation.fallbackReason &&
+            /503/.test(r.invocation.fallbackReason),
+          `expected 503 in fallbackReason, got ${r.invocation.fallbackReason}`,
+        );
+      },
+    );
+  } finally {
+    setOpenAIChatClientForTesting(null);
+  }
+});
+
+test("kredietworkflow stays on json_object path when KW_USE_STRUCTURED_OUTPUTS is unset (rollback)", async () => {
+  const { dossierId } = await createDossier();
+  const [dossier] = await db
+    .select()
+    .from(dossiersTable)
+    .where(inArray(dossiersTable.id, [dossierId]));
+  let observed: unknown;
+  setOpenAIChatClientForTesting({
+    async chat(req) {
+      observed = req.responseFormat;
+      return {
+        content: JSON.stringify(buildFinancierSample()),
+        model: "gpt-4o-mini",
+      };
+    },
+  });
+  try {
+    await withKwEnv(
+      {
+        [KW_PROVIDER_ENV]: "openai",
+        OPENAI_API_KEY: "sk-test-fake-1234567890",
+        KW_USE_STRUCTURED_OUTPUTS: undefined,
+      },
+      async () => {
+        const r = await GeenbankKredietworkflowAdapter.run(buildKwArgs(dossier));
+        assert.equal(r.ok, true);
+        assert.equal(r.usedMockMode, false);
+        assert.equal(observed, "json_object");
       },
     );
   } finally {
