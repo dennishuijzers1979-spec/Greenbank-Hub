@@ -1,6 +1,6 @@
-import { useState, useEffect, useRef } from "react";
-import { useLocation } from "wouter";
-import { useLogin, useGetCurrentUser } from "@workspace/api-client-react";
+import { useState } from "react";
+import { useLocation, Redirect } from "wouter";
+import { useLogin, useGetCurrentUser, getGetCurrentUserQueryKey } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -12,49 +12,59 @@ import { Building2, Info, Loader2 } from "lucide-react";
 export default function Login() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [location, setLocation] = useLocation();
+  const [, setLocation] = useLocation();
   const queryClient = useQueryClient();
-  const { data: session, isLoading: sessionLoading } = useGetCurrentUser();
+  const { data: session, isLoading: sessionLoading } = useGetCurrentUser({
+    query: {
+      queryKey: getGetCurrentUserQueryKey(),
+      // Match AuthProvider: never auto-refetch session here. A stale
+      // in-flight `/auth/me` started without a cookie would otherwise
+      // resolve after login completes and overwrite the cache with
+      // `{ user: null }`, triggering a /login ↔ /dashboard redirect loop.
+      staleTime: Infinity,
+      refetchOnMount: false,
+      refetchOnWindowFocus: false,
+      refetchOnReconnect: false,
+      retry: false,
+    },
+  });
   const loginMutation = useLogin();
-  const hasRedirectedRef = useRef(false);
 
-  const userId = session?.user?.id ?? null;
-  const firstLoginCompleted = session?.user?.firstLoginCompleted ?? null;
-
-  useEffect(() => {
-    if (sessionLoading) return;
-    if (!userId) return;
-    if (hasRedirectedRef.current) return;
-    hasRedirectedRef.current = true;
-    if (firstLoginCompleted === false) {
-      setLocation("/wachtwoord-wijzigen");
-    } else {
-      setLocation("/dashboard");
-    }
-    // setLocation from wouter is recreated each render; depending on it would
-    // re-fire this effect every render and (combined with the pushState it
-    // performs) cause an infinite update loop. Key off stable primitive
-    // user fields and rely on the ref-guard to ensure a single redirect.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionLoading, userId, firstLoginCompleted]);
-
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    // Cancel any in-flight `/auth/me` request so it cannot resolve after
+    // login completes and overwrite the freshly-authenticated cache with
+    // `{ user: null }`.
+    await queryClient.cancelQueries({ queryKey: getGetCurrentUserQueryKey() });
     loginMutation.mutate({ data: { email, password } }, {
       onSuccess: (data) => {
-        queryClient.setQueryData(["/api/auth/me"], data);
-        hasRedirectedRef.current = true;
-        if (data.user && !data.user.firstLoginCompleted) {
-          setLocation("/wachtwoord-wijzigen");
-        } else {
-          setLocation("/dashboard");
-        }
-      }
+        // Use a full page navigation rather than wouter's setLocation +
+        // setQueryData. The setQueryData approach hit a React Query
+        // observer-notification edge case where AuthProvider's existing
+        // `useGetCurrentUser` subscriber did not pick up the cached
+        // session, leading to ProtectedRoute redirecting back to /login
+        // while /login redirected back to /dashboard ("Maximum update
+        // depth exceeded" infinite loop). A hard navigation re-mounts
+        // the app so AuthProvider performs its initial /auth/me fetch
+        // with the new session cookie.
+        const target =
+          data.user && !data.user.firstLoginCompleted
+            ? "wachtwoord-wijzigen"
+            : "dashboard";
+        const base = import.meta.env.BASE_URL.endsWith("/")
+          ? import.meta.env.BASE_URL
+          : `${import.meta.env.BASE_URL}/`;
+        window.location.assign(`${base}${target}`);
+      },
     });
   };
 
   if (sessionLoading) {
     return <div className="flex h-screen w-full items-center justify-center"><Loader2 className="w-8 h-8 animate-spin text-primary" /></div>;
+  }
+
+  if (session?.user) {
+    return <Redirect to={session.user.firstLoginCompleted ? "/dashboard" : "/wachtwoord-wijzigen"} />;
   }
 
   return (
