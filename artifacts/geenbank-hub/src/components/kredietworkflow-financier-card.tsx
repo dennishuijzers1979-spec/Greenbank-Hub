@@ -313,16 +313,49 @@ export function KredietworkflowFinancierCard({
         )}
 
         {/* 4. Commercial proposal / term sheet summary */}
-        {proposal && (proposal.summary || (proposal.collateralPackage && proposal.collateralPackage.length > 0) || (proposal.covenantPackage && proposal.covenantPackage.length > 0) || proposal.fees || proposal.monitoringCadence) && (
+        {proposal && (
+          proposal.summary ||
+          (proposal.structure && (
+            proposal.structure.facilityType ||
+            (proposal.structure.amount !== null && proposal.structure.amount !== undefined) ||
+            (proposal.structure.rate !== null && proposal.structure.rate !== undefined) ||
+            proposal.structure.rateComment ||
+            proposal.structure.tenor ||
+            proposal.structure.repaymentProfile ||
+            proposal.structure.purpose
+          )) ||
+          (proposal.collateralPackage && proposal.collateralPackage.length > 0) ||
+          (proposal.covenantPackage && proposal.covenantPackage.length > 0) ||
+          (proposal.conditionsPrecedent && proposal.conditionsPrecedent.length > 0) ||
+          (proposal.eventsOfDefault && proposal.eventsOfDefault.length > 0) ||
+          proposal.fees ||
+          proposal.monitoringCadence
+        ) && (
           <section className="space-y-2 border-t pt-4">
             <h3 className="text-sm font-semibold flex items-center gap-2">
               <Gavel className="w-4 h-4" /> Commercieel voorstel / term sheet
             </h3>
             {proposal.summary && <p className="text-sm text-muted-foreground leading-relaxed">{proposal.summary}</p>}
+            {proposal.structure && (
+              proposal.structure.facilityType ||
+              (proposal.structure.amount !== null && proposal.structure.amount !== undefined) ||
+              (proposal.structure.rate !== null && proposal.structure.rate !== undefined) ||
+              proposal.structure.rateComment ||
+              proposal.structure.tenor ||
+              proposal.structure.repaymentProfile
+            ) && (
+              <dl className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1 text-sm">
+                {proposal.structure.facilityType && (<><dt className="text-muted-foreground">Faciliteit</dt><dd>{proposal.structure.facilityType}</dd></>)}
+                {(proposal.structure.amount !== null && proposal.structure.amount !== undefined) && (<><dt className="text-muted-foreground">Bedrag</dt><dd>{fmtAmount(proposal.structure.amount)}</dd></>)}
+                {((proposal.structure.rate !== null && proposal.structure.rate !== undefined) || proposal.structure.rateComment) && (<><dt className="text-muted-foreground">Rente</dt><dd>{fmtRate(proposal.structure)}</dd></>)}
+                {proposal.structure.tenor && (<><dt className="text-muted-foreground">Looptijd</dt><dd>{proposal.structure.tenor}</dd></>)}
+                {proposal.structure.repaymentProfile && (<><dt className="text-muted-foreground">Aflossingsprofiel</dt><dd>{proposal.structure.repaymentProfile}</dd></>)}
+              </dl>
+            )}
             <dl className="grid grid-cols-1 sm:grid-cols-3 gap-x-6 gap-y-1 text-sm">
               {proposal.fees && (
                 <>
-                  <dt className="text-muted-foreground">Fees</dt>
+                  <dt className="text-muted-foreground">Vergoedingen</dt>
                   <dd className="sm:col-span-2">{proposal.fees}</dd>
                 </>
               )}
@@ -348,6 +381,26 @@ export function KredietworkflowFinancierCard({
                 <p className="text-muted-foreground mb-1">Convenanten</p>
                 <ul className="list-disc list-inside space-y-0.5 ml-1">
                   {proposal.covenantPackage.map((c, i) => (
+                    <li key={i}>{c}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {proposal.conditionsPrecedent && proposal.conditionsPrecedent.length > 0 && (
+              <div className="text-sm">
+                <p className="text-muted-foreground mb-1">Opschortende voorwaarden</p>
+                <ul className="list-disc list-inside space-y-0.5 ml-1">
+                  {proposal.conditionsPrecedent.map((c, i) => (
+                    <li key={i}>{c}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {proposal.eventsOfDefault && proposal.eventsOfDefault.length > 0 && (
+              <div className="text-sm">
+                <p className="text-muted-foreground mb-1">Events of default</p>
+                <ul className="list-disc list-inside space-y-0.5 ml-1">
+                  {proposal.eventsOfDefault.map((c, i) => (
                     <li key={i}>{c}</li>
                   ))}
                 </ul>
@@ -387,7 +440,7 @@ export function KredietworkflowFinancierCard({
                                 {c.description || "—"}
                                 {c.prefunding && (
                                   <span className="ml-2 text-[11px] px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200">
-                                    pre-funding
+                                    vooraf te voldoen
                                   </span>
                                 )}
                               </span>
@@ -404,7 +457,7 @@ export function KredietworkflowFinancierCard({
         )}
 
         {/* 6. Pricing indication */}
-        {pricing && ((pricing.components && pricing.components.length > 0) || pricing.grandTotalMonthlyRate !== null || pricing.notes) && (
+        {pricing && ((pricing.components && pricing.components.length > 0) || (pricing.grandTotalMonthlyRate !== null && pricing.grandTotalMonthlyRate !== undefined) || pricing.notes) && (
           <section className="space-y-2 border-t pt-4">
             <h3 className="text-sm font-semibold flex items-center gap-2">
               <ListChecks className="w-4 h-4" /> Pricing-indicatie
