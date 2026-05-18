@@ -15,3 +15,8 @@ BASE_PATH = "/__mockup"
 
 [services.development]
 run = "pnpm --filter @workspace/mockup-sandbox run dev"
+
+# The mockup-sandbox is a dev-only Canvas / design tool. It must not be
+# deployed to production. The production block is intentionally a no-op
+# (no build, no run) so Replit's deploy sweep ignores this artifact.
+[services.production]
