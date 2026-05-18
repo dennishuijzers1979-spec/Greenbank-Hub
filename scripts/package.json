@@ -9,6 +9,7 @@
     "pilot:cleanup:dry-run": "tsx ./src/pilot-cleanup.ts",
     "pilot:cleanup": "tsx ./src/pilot-cleanup.ts --apply",
     "demo:reset": "tsx ./src/demo-reset.ts",
+    "smoke": "tsx ./src/smoke-test.ts",
     "test": "node --import tsx --test src/__tests__/*.test.ts"
   },
   "dependencies": {

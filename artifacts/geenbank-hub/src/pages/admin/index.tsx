@@ -1,13 +1,44 @@
 import { useGetAdminMetrics, getGetAdminMetricsQueryKey, useGetIntegrationsStatus, getGetIntegrationsStatusQueryKey, type IntegrationStatus } from "@workspace/api-client-react";
+import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { Database, Link as LinkIcon, Activity, CheckCircle2, XCircle, Loader2 } from "lucide-react";
+import { Database, Link as LinkIcon, Activity, CheckCircle2, XCircle, Loader2, AlertTriangle } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+
+type PilotStatus = {
+  app: { status: string; nodeEnv: string; timestamp: string; commit: string | null };
+  database: {
+    reachable: boolean;
+    counts: { admin: number; loanOfficer: number; prospect: number; dossier: number; partner: number; prospectProfile: number };
+  };
+  env: {
+    required: Array<{ name: string; present: boolean; description: string }>;
+    optional: Array<{ name: string; present: boolean; description: string }>;
+    missingRequired: string[];
+  };
+  integrations: {
+    pipedrive: { name: string; live: boolean; message: string };
+    sendgrid: { name: string; live: boolean; message: string };
+    aiSkills: { name: string; live: boolean; message: string };
+    objectStorage: { name: string; live: boolean; message: string };
+    partnerSending: { name: string; live: boolean; message: string };
+  };
+  autoSeed: { enabled: boolean; reason: string };
+  demoWarning: string | null;
+};
 
 export default function AdminDashboard() {
   const { data: metrics, isLoading: loadingMetrics } = useGetAdminMetrics({ query: { queryKey: getGetAdminMetricsQueryKey() } });
   const { data: integrations, isLoading: loadingIntegrations } = useGetIntegrationsStatus({ query: { queryKey: getGetIntegrationsStatusQueryKey() } });
+  const { data: pilot, isLoading: loadingPilot } = useQuery<PilotStatus>({
+    queryKey: ["admin", "pilot-status"],
+    queryFn: async () => {
+      const r = await fetch("/api/admin/pilot-status", { credentials: "include" });
+      if (!r.ok) throw new Error(`pilot-status failed: ${r.status}`);
+      return r.json() as Promise<PilotStatus>;
+    },
+  });
 
-  if (loadingMetrics || loadingIntegrations) {
+  if (loadingMetrics || loadingIntegrations || loadingPilot) {
     return <div className="p-8 flex justify-center"><Loader2 className="w-8 h-8 animate-spin text-primary" /></div>;
   }
 
@@ -19,6 +50,62 @@ export default function AdminDashboard() {
           <p className="text-muted-foreground">Systeemstatus en overkoepelende prestaties.</p>
         </div>
       </div>
+
+      {pilot?.demoWarning && (
+        <div className="border border-amber-300 bg-amber-50 text-amber-900 rounded-lg p-4 flex gap-3 items-start" data-testid="demo-warning">
+          <AlertTriangle className="w-5 h-5 mt-0.5 flex-shrink-0 text-amber-600" />
+          <div className="text-sm">
+            <p className="font-medium">Let op — demo-gegevens actief</p>
+            <p className="mt-1">{pilot.demoWarning}</p>
+            <p className="mt-1 text-amber-800">
+              De cleanup-scripts in <code className="font-mono text-xs">scripts/src/</code> kunnen
+              ongewenste testfixtures of Aurora alsnog verwijderen vóór externe pilot-toegang.
+              Voer <code className="font-mono text-xs">demo:reset</code> nooit uit op een productie-DB.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {pilot && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2"><Database className="w-5 h-5" /> Pilot-status</CardTitle>
+            <CardDescription>
+              {pilot.app.nodeEnv} · DB {pilot.database.reachable ? "bereikbaar" : "onbereikbaar"} ·
+              auto-seed: {pilot.autoSeed.reason}
+              {pilot.app.commit ? ` · build ${pilot.app.commit.slice(0, 8)}` : ""}
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid grid-cols-2 md:grid-cols-6 gap-3 text-sm">
+              <Stat label="Admin" value={pilot.database.counts.admin} />
+              <Stat label="Loan officers" value={pilot.database.counts.loanOfficer} />
+              <Stat label="Prospects" value={pilot.database.counts.prospect} />
+              <Stat label="Dossiers" value={pilot.database.counts.dossier} />
+              <Stat label="Profielen" value={pilot.database.counts.prospectProfile} />
+              <Stat label="Partners" value={pilot.database.counts.partner} />
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-5 gap-2 text-xs">
+              {Object.values(pilot.integrations).map((i) => (
+                <div key={i.name} className="border rounded p-2">
+                  <div className="flex items-center justify-between">
+                    <span className="font-medium">{i.name}</span>
+                    <span className={`px-1.5 py-0.5 rounded text-[10px] ${i.live ? "bg-green-100 text-green-800" : "bg-slate-100 text-slate-700"}`}>
+                      {i.live ? "live" : "mock"}
+                    </span>
+                  </div>
+                  <p className="text-muted-foreground mt-1">{i.message}</p>
+                </div>
+              ))}
+            </div>
+            {pilot.env.missingRequired.length > 0 && (
+              <div className="text-xs text-red-700 border border-red-200 bg-red-50 rounded p-2">
+                Ontbrekende verplichte omgevingsvariabelen: {pilot.env.missingRequired.join(", ")}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <Card>
@@ -135,6 +222,15 @@ export default function AdminDashboard() {
           </CardContent>
         </Card>
       </div>
+    </div>
+  );
+}
+
+function Stat({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="border rounded-lg p-3">
+      <p className="text-xs text-muted-foreground">{label}</p>
+      <p className="text-xl font-semibold">{value}</p>
     </div>
   );
 }

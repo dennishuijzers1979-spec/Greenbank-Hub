@@ -113,6 +113,25 @@ environments — do not point at a live pilot database.
 6. Disable the automatic seed by deploying with `NODE_ENV=production`
    and **without** `SEED_DEMO_DATA=1`.
 
+## Live pilot deployment
+
+See [`DEPLOYMENT.md`](./DEPLOYMENT.md) for the full deployment guide:
+required vs optional env vars, mock-vs-live integration status, the
+admin pilot-status endpoint, the smoke-test script, the post-deploy
+manual checklist, rollback steps, and known limitations.
+
+Quick checks:
+
+```bash
+# Automated smoke test against the deployed app
+BASE_URL=https://<your-deploy>.replit.app \
+  ADMIN_EMAIL=admin@geenbank.nl ADMIN_PASSWORD='<rotated>' \
+  pnpm --filter @workspace/scripts run smoke
+
+# Admin operator view (in-app): /admin shows integrations, cleaned-DB
+# sanity counts, auto-seed status, and a demo-credential warning.
+```
+
 ## User preferences
 
 (none yet)

@@ -10,6 +10,7 @@ import submissionsRouter from "./submissions";
 import dashboardRouter from "./dashboard";
 import activityRouter from "./activity";
 import integrationsRouter from "./integrations";
+import adminPilotRouter from "./admin-pilot";
 
 const router: IRouter = Router();
 
@@ -24,5 +25,6 @@ router.use(submissionsRouter);
 router.use(dashboardRouter);
 router.use(activityRouter);
 router.use(integrationsRouter);
+router.use(adminPilotRouter);
 
 export default router;
