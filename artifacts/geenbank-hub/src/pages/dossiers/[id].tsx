@@ -32,6 +32,45 @@ import { useToast } from "@/hooks/use-toast";
 import { format } from "date-fns";
 import { nl } from "date-fns/locale";
 
+/**
+ * Surface a meaningful error toast for an API mutation error. The
+ * generated api-client may surface errors with a parsed JSON `data`
+ * (object with `error`/`message`), a raw string body (e.g. the
+ * Express default 404 HTML when a route is unreachable), or no body
+ * at all. We also fall back to `Error.message` so a network failure
+ * doesn't degrade to the generic Dutch fallback.
+ */
+function extractApiError(
+  err: unknown,
+  fallbackTitle: string,
+  fallbackDescription: string,
+): { title: string; description: string } {
+  let title: string | undefined;
+  let description: string | undefined;
+  if (err && typeof err === "object") {
+    const data = (err as { data?: unknown }).data;
+    if (data && typeof data === "object") {
+      const d = data as { error?: unknown; message?: unknown };
+      if (typeof d.error === "string") title = d.error;
+      if (typeof d.message === "string") description = d.message;
+    } else if (typeof data === "string" && data.trim()) {
+      description = data.trim().slice(0, 300);
+    }
+    const status = (err as { status?: unknown }).status;
+    if (!title && typeof status === "number") {
+      title = `${fallbackTitle} (HTTP ${status})`;
+    }
+    const msg = (err as { message?: unknown }).message;
+    if (!description && typeof msg === "string" && msg.trim()) {
+      description = msg.trim();
+    }
+  }
+  return {
+    title: title ?? fallbackTitle,
+    description: description ?? fallbackDescription,
+  };
+}
+
 export default function DossierDetail() {
   const params = useParams<{ id: string }>();
   const id = params.id as string;
@@ -224,15 +263,12 @@ export default function DossierDetail() {
           });
         },
         onError: (err: unknown) => {
-          const data =
-            err && typeof err === "object" && "data" in err && (err as { data: unknown }).data && typeof (err as { data: unknown }).data === "object"
-              ? ((err as { data: { error?: string; message?: string } }).data ?? {})
-              : {};
-          toast({
-            title: data.error ?? "Verzoek mislukt",
-            description: data.message ?? "Probeer het later opnieuw.",
-            variant: "destructive",
-          });
+          const { title, description } = extractApiError(
+            err,
+            "Verzoek mislukt",
+            "Controleer de ingevoerde gegevens en probeer het opnieuw.",
+          );
+          toast({ title, description, variant: "destructive" });
         },
       },
     );
@@ -261,15 +297,12 @@ export default function DossierDetail() {
           toast({ title: "Voorwaarde geforceerd opgelost", description: "Inclusief interne notitie." });
         },
         onError: (err: unknown) => {
-          const data =
-            err && typeof err === "object" && "data" in err && (err as { data: unknown }).data && typeof (err as { data: unknown }).data === "object"
-              ? ((err as { data: { error?: string; message?: string } }).data ?? {})
-              : {};
-          toast({
-            title: data.error ?? "Kan niet opgelost worden",
-            description: data.message ?? "Probeer het later opnieuw.",
-            variant: "destructive",
-          });
+          const { title, description } = extractApiError(
+            err,
+            "Kan niet opgelost worden",
+            "Probeer het later opnieuw.",
+          );
+          toast({ title, description, variant: "destructive" });
         },
       },
     );
@@ -286,15 +319,12 @@ export default function DossierDetail() {
           toast({ title: "Voorwaarde opgelost", description: "De reactie is geaccepteerd." });
         },
         onError: (err: unknown) => {
-          const data =
-            err && typeof err === "object" && "data" in err && (err as { data: unknown }).data && typeof (err as { data: unknown }).data === "object"
-              ? ((err as { data: { error?: string; message?: string } }).data ?? {})
-              : {};
-          toast({
-            title: data.error ?? "Kan niet opgelost worden",
-            description: data.message ?? "Probeer het later opnieuw.",
-            variant: "destructive",
-          });
+          const { title, description } = extractApiError(
+            err,
+            "Kan niet opgelost worden",
+            "Probeer het later opnieuw.",
+          );
+          toast({ title, description, variant: "destructive" });
         },
       },
     );

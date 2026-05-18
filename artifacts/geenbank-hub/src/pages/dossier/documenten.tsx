@@ -110,7 +110,16 @@ export default function DocumentenUpload() {
     return 'text-amber-600 bg-amber-50 dark:bg-amber-900/20';
   };
 
-  const blockingConditions = conditions?.filter(c => c.type === 'blocking' && c.status === 'open') || [];
+  // Belt-and-suspenders prospect privacy: only ever show items the
+  // loan officer has EXPLICITLY turned into a prospect-facing request
+  // (requestedAt non-null). The server already filters internal-only
+  // rows, but we double-filter here so even a buggy/legacy server
+  // response can never leak internal credit wording (LTV, covenants,
+  // solvency, reviewer notes, raw AI text) into the red
+  // "Aandachtspunten" box.
+  const blockingConditions = (conditions ?? []).filter(
+    (c) => c.type === 'blocking' && c.status === 'open' && !!c.requestedAt,
+  );
 
   const requiredTypes = DOCUMENT_TYPE_OPTIONS.filter(o => o.required);
   const presentTypes = new Set(
@@ -150,7 +159,12 @@ export default function DocumentenUpload() {
           <AlertDescription>
             <ul className="list-disc pl-5 mt-2 space-y-1">
               {blockingConditions.map(cond => (
-                <li key={cond.id}>{cond.title}: {cond.description}</li>
+                <li key={cond.id}>
+                  {cond.prospectTitle ?? cond.title}
+                  {(cond.prospectExplanation ?? cond.description)
+                    ? `: ${cond.prospectExplanation ?? cond.description}`
+                    : ""}
+                </li>
               ))}
             </ul>
           </AlertDescription>

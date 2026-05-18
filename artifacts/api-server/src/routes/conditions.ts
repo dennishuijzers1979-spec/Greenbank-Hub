@@ -46,26 +46,24 @@ router.get("/dossiers/me/conditions", requireAuth(["prospect"]), async (req, res
     res.json([]);
     return;
   }
-  // Critical visibility rule: the prospect only sees conditions that
-  // the loan officer has explicitly requested from them (requestedAt
-  // non-null). Backward compat: if the dossier is in
-  // "additional_info_requested" status AND no row carries an explicit
-  // requestedAt stamp, treat ALL of its conditions as effectively
-  // requested (legacy decision flow without per-row stamping).
-  // The moment a single row has been explicitly requested, the rest
-  // are considered internal-only — internal credit wording MUST NOT
-  // leak alongside an explicit request.
-  const allDossierConditions = await db
+  // Hard visibility rule: the prospect only ever sees conditions that
+  // the loan officer has EXPLICITLY turned into a prospect-facing
+  // request (requestedAt non-null). Internal credit / AI wording —
+  // covenants, LTV, solvency, reviewer notes, raw AI condition text —
+  // MUST NEVER leak to the prospect, regardless of dossier status.
+  // Legacy dossiers that pre-date per-row stamping must be migrated
+  // through the LO "Aanvullende informatie vragen" dialog before the
+  // ondernemer sees anything.
+  const items = await db
     .select()
     .from(conditionsTable)
-    .where(eq(conditionsTable.dossierId, dossier.id))
+    .where(
+      and(
+        eq(conditionsTable.dossierId, dossier.id),
+        isNotNull(conditionsTable.requestedAt),
+      ),
+    )
     .orderBy(desc(conditionsTable.createdAt));
-  const anyExplicitlyRequested = allDossierConditions.some((c) => c.requestedAt);
-  const legacyBatch =
-    dossier.status === "additional_info_requested" && !anyExplicitlyRequested;
-  const items = legacyBatch
-    ? allDossierConditions
-    : allDossierConditions.filter((c) => c.requestedAt);
 
   // Resolve any linked response document filenames in one batched query
   // so the prospect UI can show "uploaded as X.pdf" without an extra
@@ -196,24 +194,12 @@ router.post(
     }
     // Reject responses to internal-only conditions — the prospect
     // should not even know about them, so 404 (consistent with the
-    // visibility filter on the list endpoint). Backward-compat
-    // mirror of the visibility rule above: only treat un-stamped rows
-    // as requested when the dossier is the all-legacy batch case
-    // (status = additional_info_requested AND no sibling row has been
-    // explicitly stamped).
+    // visibility filter on the list endpoint). No legacy fallback:
+    // unrequested rows are strictly internal, regardless of dossier
+    // status.
     if (!row.condition.requestedAt) {
-      if (row.dossier.status !== "additional_info_requested") {
-        res.status(404).json({ error: "Voorwaarde niet gevonden" });
-        return;
-      }
-      const siblings = await db
-        .select({ requestedAt: conditionsTable.requestedAt })
-        .from(conditionsTable)
-        .where(eq(conditionsTable.dossierId, row.condition.dossierId));
-      if (siblings.some((s) => s.requestedAt)) {
-        res.status(404).json({ error: "Voorwaarde niet gevonden" });
-        return;
-      }
+      res.status(404).json({ error: "Voorwaarde niet gevonden" });
+      return;
     }
     if (row.condition.status === "resolved") {
       res.status(409).json({

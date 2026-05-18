@@ -126,6 +126,13 @@ async function createScenario(opts?: {
     .returning();
   createdDossierIds.push(dossier.id);
   const titles = opts?.conditionTitles ?? ["Bankafschriften Q4 2025"];
+  // Scenario assumes the loan officer has already explicitly turned
+  // each item into a prospect-facing request (requestedAt stamped +
+  // prospect-facing copy populated). The recovery-loop tests then
+  // exercise the response/resolve flow on top of that. Internal-only
+  // (unstamped) conditions are NOT visible to the prospect and have
+  // their own dedicated coverage in additional-info-request.test.ts.
+  const now = new Date();
   const conds = await db
     .insert(conditionsTable)
     .values(
@@ -136,6 +143,11 @@ async function createScenario(opts?: {
         title: t,
         description: t,
         requiredAction: t,
+        prospectTitle: t,
+        prospectExplanation: t,
+        prospectRequiredAction: t,
+        requestedAt: now,
+        requestedBy: prospect.userId,
         reviewerNotes: opts?.reviewerNotes ?? "INTERNE NOTITIE — niet voor prospect",
       })),
     )
