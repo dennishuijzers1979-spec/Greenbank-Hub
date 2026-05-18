@@ -7,6 +7,28 @@
  */
 import type { ConditionType } from "./conditionType";
 
+/**
+ * A dossier condition (a blocking or advisory point to address).
+Conditions have two visibility tracks:
+
+* **Internal** (`requestedAt == null`): visible to the loan officer
+  / admin only. The plain `title`/`description`/`requiredAction`
+  fields contain internal credit/AI wording and MUST NOT be shown
+  to the prospect verbatim.
+* **Requested from prospect** (`requestedAt != null`): the loan
+  officer has explicitly turned the condition into an
+  entrepreneur-facing request. On prospect-facing endpoints the
+  `title`/`description`/`requiredAction` fields are populated
+  with the entrepreneur-friendly copy
+  (`prospectTitle` / `prospectExplanation` / `prospectRequiredAction`).
+
+Derived status (UI-facing):
+  * `open` + `requestedAt == null` → internal only
+  * `open` + `requestedAt != null` → requested_from_prospect
+  * `submitted`                    → submitted_by_prospect
+  * `resolved`                     → resolved
+
+ */
 export interface Condition {
   id: string;
   dossierId: string;
@@ -15,6 +37,11 @@ export interface Condition {
   description: string;
   requiredAction?: string | null;
   status: string;
+  prospectTitle?: string | null;
+  prospectExplanation?: string | null;
+  prospectRequiredAction?: string | null;
+  documentTypeHint?: string | null;
+  requestedAt?: string | null;
   responseText?: string | null;
   responseDocumentId?: string | null;
   responseDocumentFilename?: string | null;

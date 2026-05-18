@@ -33,6 +33,19 @@ export const conditionsTable = pgTable("conditions", {
     onDelete: "set null",
   }),
   reviewerNotes: text("reviewer_notes"),
+  // Prospect-facing copy, set by the loan officer when this condition is
+  // explicitly requested from the entrepreneur. When `requestedAt` is
+  // null, the condition is internal-only and MUST NOT be shown to the
+  // prospect. The plain `title`/`description`/`requiredAction` columns
+  // are internal credit/AI language and stay invisible to the prospect.
+  prospectTitle: text("prospect_title"),
+  prospectExplanation: text("prospect_explanation"),
+  prospectRequiredAction: text("prospect_required_action"),
+  documentTypeHint: text("document_type_hint"),
+  requestedAt: timestamp("requested_at", { withTimezone: true }),
+  requestedBy: uuid("requested_by").references(() => usersTable.id, {
+    onDelete: "set null",
+  }),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),

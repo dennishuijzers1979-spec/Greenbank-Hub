@@ -6,6 +6,12 @@
  * OpenAPI spec version: 0.1.0
  */
 
+/**
+ * `reviewerNotes` is internal-only and is required when the officer
+chooses to resolve a still-open requested item without a prospect
+response (force-resolve / admin override).
+
+ */
 export interface ConditionResolveInput {
   reviewerNotes?: string | null;
 }

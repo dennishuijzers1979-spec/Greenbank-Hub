@@ -13,7 +13,9 @@ import {
   useGetDualViewAdvice, getGetDualViewAdviceQueryKey,
   useListConditions, getListConditionsQueryKey,
   useResolveCondition, useReturnDossierToReview,
+  useRequestAdditionalInfo,
 } from "@workspace/api-client-react";
+import type { Condition } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
@@ -45,6 +47,75 @@ export default function DossierDetail() {
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const [isPackagePreviewOpen, setIsPackagePreviewOpen] = useState(false);
   const [partnerSubmissionNotes, setPartnerSubmissionNotes] = useState("");
+
+  // Additional-info request dialog state. Each draft item carries the
+  // editable entrepreneur-facing copy (rewritten from the internal
+  // condition title if the LO opened the dialog from a specific row).
+  interface RequestDraftItem {
+    internalConditionId: string | null;
+    prospectTitle: string;
+    prospectExplanation: string;
+    prospectRequiredAction: string;
+    documentTypeHint: string;
+    reviewerNotes: string;
+  }
+  const [isRequestInfoOpen, setIsRequestInfoOpen] = useState(false);
+  const [requestDraft, setRequestDraft] = useState<RequestDraftItem[]>([]);
+
+  // Force-resolve dialog: lets the officer accept a still-open
+  // requested item without a prospect response, provided they record
+  // an internal reviewer note explaining why.
+  const [forceResolveTarget, setForceResolveTarget] = useState<Condition | null>(null);
+  const [forceResolveNote, setForceResolveNote] = useState("");
+
+  // Build a sensible Dutch starting draft from an internal condition.
+  // The LO is expected to refine the copy before sending — this is
+  // explicitly NOT a verbatim copy of the credit/AI wording.
+  function draftFromCondition(c: Condition): RequestDraftItem {
+    const internal = (c.title || "").trim();
+    return {
+      internalConditionId: c.id,
+      prospectTitle: c.prospectTitle && c.prospectTitle.trim()
+        ? c.prospectTitle
+        : `Aanvullende informatie nodig${internal ? `: ${internal}` : ""}`,
+      prospectExplanation: c.prospectExplanation && c.prospectExplanation.trim()
+        ? c.prospectExplanation
+        : "Met deze informatie kunnen we je financieringsaanvraag beter en sneller beoordelen. Pas de tekst hieronder gerust aan zodat deze duidelijk is voor de ondernemer.",
+      prospectRequiredAction: c.prospectRequiredAction && c.prospectRequiredAction.trim()
+        ? c.prospectRequiredAction
+        : "Lever de gevraagde documenten of een toelichting aan via dit dossier.",
+      documentTypeHint: c.documentTypeHint ?? "",
+      reviewerNotes: c.reviewerNotes ?? "",
+    };
+  }
+  const blankDraft = (): RequestDraftItem => ({
+    internalConditionId: null,
+    prospectTitle: "",
+    prospectExplanation: "",
+    prospectRequiredAction: "",
+    documentTypeHint: "",
+    reviewerNotes: "",
+  });
+
+  function openRequestInfoBlank() {
+    setRequestDraft([blankDraft()]);
+    setIsRequestInfoOpen(true);
+  }
+  function openRequestInfoFromCondition(c: Condition) {
+    setRequestDraft([draftFromCondition(c)]);
+    setIsRequestInfoOpen(true);
+  }
+  function updateDraftItem(idx: number, patch: Partial<RequestDraftItem>) {
+    setRequestDraft((prev) =>
+      prev.map((item, i) => (i === idx ? { ...item, ...patch } : item)),
+    );
+  }
+  function addDraftItem() {
+    setRequestDraft((prev) => [...prev, blankDraft()]);
+  }
+  function removeDraftItem(idx: number) {
+    setRequestDraft((prev) => prev.filter((_, i) => i !== idx));
+  }
 
   const DECIDABLE_STATUSES = new Set([
     "submitted_to_geenbank",
@@ -106,6 +177,103 @@ export default function DossierDetail() {
   const submitPartnerMutation = useSubmitDossierToPartners();
   const resolveConditionMutation = useResolveCondition();
   const returnToReviewMutation = useReturnDossierToReview();
+  const requestAdditionalInfoMutation = useRequestAdditionalInfo();
+
+  const handleSubmitRequestInfo = () => {
+    if (requestAdditionalInfoMutation.isPending) return;
+    const cleaned = requestDraft
+      .map((d) => ({
+        internalConditionId: d.internalConditionId,
+        prospectTitle: d.prospectTitle.trim(),
+        prospectExplanation: d.prospectExplanation.trim(),
+        prospectRequiredAction: d.prospectRequiredAction.trim(),
+        documentTypeHint: d.documentTypeHint.trim() || null,
+        reviewerNotes: d.reviewerNotes.trim() || null,
+      }))
+      .filter((d) => d.prospectTitle || d.prospectExplanation || d.prospectRequiredAction);
+    if (cleaned.length === 0) {
+      toast({
+        title: "Geen verzoeken",
+        description: "Vul minimaal één verzoek volledig in.",
+        variant: "destructive",
+      });
+      return;
+    }
+    const incomplete = cleaned.find(
+      (d) => !d.prospectTitle || !d.prospectExplanation || !d.prospectRequiredAction,
+    );
+    if (incomplete) {
+      toast({
+        title: "Verzoek onvolledig",
+        description: "Titel, toelichting en gevraagde actie zijn verplicht voor elk verzoek.",
+        variant: "destructive",
+      });
+      return;
+    }
+    requestAdditionalInfoMutation.mutate(
+      { dossierId: id, data: { items: cleaned } },
+      {
+        onSuccess: () => {
+          queryClient.invalidateQueries({ queryKey: getListConditionsQueryKey(id) });
+          queryClient.invalidateQueries({ queryKey: getGetDossierQueryKey(id) });
+          setIsRequestInfoOpen(false);
+          setRequestDraft([]);
+          toast({
+            title: "Verzoek klaargezet",
+            description: `${cleaned.length} verzoek(en) staan klaar voor de ondernemer.`,
+          });
+        },
+        onError: (err: unknown) => {
+          const data =
+            err && typeof err === "object" && "data" in err && (err as { data: unknown }).data && typeof (err as { data: unknown }).data === "object"
+              ? ((err as { data: { error?: string; message?: string } }).data ?? {})
+              : {};
+          toast({
+            title: data.error ?? "Verzoek mislukt",
+            description: data.message ?? "Probeer het later opnieuw.",
+            variant: "destructive",
+          });
+        },
+      },
+    );
+  };
+
+  const handleForceResolve = () => {
+    if (!forceResolveTarget) return;
+    if (resolveConditionMutation.isPending) return;
+    const note = forceResolveNote.trim();
+    if (!note) {
+      toast({
+        title: "Interne notitie vereist",
+        description: "Geef een interne reden op om dit punt zonder reactie te accepteren.",
+        variant: "destructive",
+      });
+      return;
+    }
+    resolveConditionMutation.mutate(
+      { conditionId: forceResolveTarget.id, data: { reviewerNotes: note } },
+      {
+        onSuccess: () => {
+          queryClient.invalidateQueries({ queryKey: getListConditionsQueryKey(id) });
+          queryClient.invalidateQueries({ queryKey: getGetDossierQueryKey(id) });
+          setForceResolveTarget(null);
+          setForceResolveNote("");
+          toast({ title: "Voorwaarde geforceerd opgelost", description: "Inclusief interne notitie." });
+        },
+        onError: (err: unknown) => {
+          const data =
+            err && typeof err === "object" && "data" in err && (err as { data: unknown }).data && typeof (err as { data: unknown }).data === "object"
+              ? ((err as { data: { error?: string; message?: string } }).data ?? {})
+              : {};
+          toast({
+            title: data.error ?? "Kan niet opgelost worden",
+            description: data.message ?? "Probeer het later opnieuw.",
+            variant: "destructive",
+          });
+        },
+      },
+    );
+  };
 
   const handleResolveCondition = (conditionId: string) => {
     if (resolveConditionMutation.isPending) return;
@@ -879,6 +1047,20 @@ export default function DossierDetail() {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-xs text-muted-foreground">
+                  Tip: zet interne credit-bevindingen om in heldere
+                  ondernemer-vragen voordat je ze opvraagt.
+                </p>
+                <Button
+                  size="sm"
+                  onClick={openRequestInfoBlank}
+                  data-testid="lo-button-request-additional-info"
+                >
+                  <Mail className="w-4 h-4 mr-2" />
+                  Aanvullende informatie vragen
+                </Button>
+              </div>
               {!conditions || conditions.length === 0 ? (
                 <p className="text-sm italic text-muted-foreground">
                   Er zijn geen voorwaarden vastgelegd voor dit dossier.
@@ -923,39 +1105,94 @@ export default function DossierDetail() {
                     );
                   })()}
                   <div className="space-y-3">
-                    {conditions.map(c => (
+                    {conditions.map(c => {
+                      const isRequested = !!c.requestedAt;
+                      return (
                       <div
                         key={c.id}
                         data-testid={`lo-condition-${c.id}`}
                         data-status={c.status}
+                        data-visibility={isRequested ? "requested" : "internal"}
                         className="rounded-lg border p-4 space-y-2"
                       >
                         <div className="flex items-start justify-between gap-3">
-                          <div>
+                          <div className="min-w-0 flex-1">
                             <h4 className="font-medium">{c.title}</h4>
                             {c.requiredAction && c.requiredAction !== c.title && (
                               <p className="text-sm text-muted-foreground">{c.requiredAction}</p>
                             )}
-                            <div className="flex gap-2 mt-1">
+                            <div className="flex flex-wrap gap-2 mt-1">
                               <Badge variant="outline" className="text-[10px]">
                                 {c.type === "blocking" ? "blokkerend" : "advies"}
                               </Badge>
                               <Badge variant="outline" className="text-[10px]">
-                                {c.status === "open" ? "open" : c.status === "submitted" ? "ingediend" : "opgelost"}
+                                {c.status === "open" ? (isRequested ? "open bij ondernemer" : "intern") : c.status === "submitted" ? "ingediend" : "opgelost"}
                               </Badge>
+                              {isRequested ? (
+                                <Badge
+                                  variant="outline"
+                                  className="text-[10px] border-blue-400 text-blue-900"
+                                  data-testid={`lo-badge-requested-${c.id}`}
+                                >
+                                  gevraagd bij ondernemer
+                                </Badge>
+                              ) : (
+                                <Badge
+                                  variant="outline"
+                                  className="text-[10px] border-slate-400 text-slate-700"
+                                  data-testid={`lo-badge-internal-${c.id}`}
+                                >
+                                  alleen intern
+                                </Badge>
+                              )}
                             </div>
+                            {isRequested && c.prospectTitle && c.prospectTitle !== c.title && (
+                              <div className="mt-2 rounded-md bg-blue-50/60 dark:bg-blue-950/20 p-2 text-xs space-y-0.5">
+                                <p className="font-medium text-blue-900 dark:text-blue-200">Prospect ziet:</p>
+                                <p className="text-blue-900/80 dark:text-blue-200/80">{c.prospectTitle}</p>
+                                {c.prospectExplanation && (
+                                  <p className="text-blue-900/70 dark:text-blue-200/70 italic">{c.prospectExplanation}</p>
+                                )}
+                              </div>
+                            )}
                           </div>
-                          {c.type === "blocking" && c.status === "submitted" && (
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => handleResolveCondition(c.id)}
-                              disabled={resolveConditionMutation.isPending}
-                              data-testid={`lo-resolve-${c.id}`}
-                            >
-                              Markeer als opgelost
-                            </Button>
-                          )}
+                          <div className="flex flex-col gap-1 shrink-0">
+                            {c.type === "blocking" && c.status === "open" && !isRequested && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => openRequestInfoFromCondition(c)}
+                                data-testid={`lo-request-${c.id}`}
+                              >
+                                <Mail className="w-3.5 h-3.5 mr-1.5" />
+                                Opvragen bij ondernemer
+                              </Button>
+                            )}
+                            {c.type === "blocking" && c.status === "submitted" && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => handleResolveCondition(c.id)}
+                                disabled={resolveConditionMutation.isPending}
+                                data-testid={`lo-resolve-${c.id}`}
+                              >
+                                Markeer als opgelost
+                              </Button>
+                            )}
+                            {c.type === "blocking" && c.status === "open" && isRequested && (
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => {
+                                  setForceResolveTarget(c);
+                                  setForceResolveNote("");
+                                }}
+                                data-testid={`lo-force-resolve-${c.id}`}
+                              >
+                                Forceer oplossen
+                              </Button>
+                            )}
+                          </div>
                         </div>
                         {c.reviewerNotes && (
                           <p className="text-sm bg-muted/30 p-2 rounded">
@@ -980,12 +1217,163 @@ export default function DossierDetail() {
                           </div>
                         )}
                       </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </>
               )}
             </CardContent>
           </Card>
+
+          {/* Request additional information dialog */}
+          <Dialog open={isRequestInfoOpen} onOpenChange={setIsRequestInfoOpen}>
+            <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto" data-testid="lo-request-info-dialog">
+              <DialogHeader>
+                <DialogTitle>Aanvullende informatie vragen</DialogTitle>
+                <DialogDescription>
+                  Schrijf elk verzoek in heldere ondernemer-taal. Wat de
+                  ondernemer hieronder ziet, is precies wat hij/zij in
+                  het portaal te zien krijgt.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="space-y-4">
+                {requestDraft.map((draft, idx) => (
+                  <div
+                    key={idx}
+                    className="rounded-lg border p-3 space-y-3"
+                    data-testid={`lo-request-draft-${idx}`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-medium text-muted-foreground">
+                        Verzoek {idx + 1}{draft.internalConditionId ? " · gebaseerd op interne voorwaarde" : ""}
+                      </span>
+                      {requestDraft.length > 1 && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => removeDraftItem(idx)}
+                          data-testid={`lo-request-remove-${idx}`}
+                        >
+                          Verwijderen
+                        </Button>
+                      )}
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-xs font-medium">Titel voor de ondernemer</label>
+                      <input
+                        className="w-full rounded-md border px-3 py-2 text-sm"
+                        value={draft.prospectTitle}
+                        onChange={(e) => updateDraftItem(idx, { prospectTitle: e.target.value })}
+                        placeholder='Bijv. "Upload de offerte of factuur van de vergistingstanks"'
+                        data-testid={`lo-request-title-${idx}`}
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-xs font-medium">Toelichting (waarom we dit vragen)</label>
+                      <Textarea
+                        value={draft.prospectExplanation}
+                        onChange={(e) => updateDraftItem(idx, { prospectExplanation: e.target.value })}
+                        rows={3}
+                        placeholder="Met deze informatie kunnen we beter beoordelen…"
+                        data-testid={`lo-request-explanation-${idx}`}
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-xs font-medium">Gevraagde actie</label>
+                      <Textarea
+                        value={draft.prospectRequiredAction}
+                        onChange={(e) => updateDraftItem(idx, { prospectRequiredAction: e.target.value })}
+                        rows={2}
+                        placeholder="Upload een offerte, factuur, taxatie of specificatie."
+                        data-testid={`lo-request-action-${idx}`}
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-xs font-medium">Document-hint (optioneel)</label>
+                      <input
+                        className="w-full rounded-md border px-3 py-2 text-sm"
+                        value={draft.documentTypeHint}
+                        onChange={(e) => updateDraftItem(idx, { documentTypeHint: e.target.value })}
+                        placeholder='Bijv. "offerte_tanks.pdf"'
+                        data-testid={`lo-request-hint-${idx}`}
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-xs font-medium">Interne notitie (alleen voor de kredietacceptant)</label>
+                      <Textarea
+                        value={draft.reviewerNotes}
+                        onChange={(e) => updateDraftItem(idx, { reviewerNotes: e.target.value })}
+                        rows={2}
+                        placeholder="Interne context, niet zichtbaar voor de ondernemer."
+                        data-testid={`lo-request-note-${idx}`}
+                      />
+                    </div>
+                  </div>
+                ))}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={addDraftItem}
+                  data-testid="lo-request-add-item"
+                >
+                  + Extra verzoek toevoegen
+                </Button>
+              </div>
+              <DialogFooter>
+                <Button variant="ghost" onClick={() => setIsRequestInfoOpen(false)}>
+                  Annuleren
+                </Button>
+                <Button
+                  onClick={handleSubmitRequestInfo}
+                  disabled={requestAdditionalInfoMutation.isPending}
+                  data-testid="lo-request-submit"
+                >
+                  {requestAdditionalInfoMutation.isPending ? (
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  ) : (
+                    <Send className="w-4 h-4 mr-2" />
+                  )}
+                  Verzoek versturen
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+
+          {/* Force-resolve dialog */}
+          <Dialog open={!!forceResolveTarget} onOpenChange={(o) => { if (!o) { setForceResolveTarget(null); setForceResolveNote(""); } }}>
+            <DialogContent data-testid="lo-force-resolve-dialog">
+              <DialogHeader>
+                <DialogTitle>Zonder reactie afhandelen</DialogTitle>
+                <DialogDescription>
+                  Je sluit dit punt zonder reactie van de ondernemer.
+                  Geef een interne notitie waarom dit verantwoord is —
+                  deze is alleen zichtbaar voor de kredietacceptant.
+                </DialogDescription>
+              </DialogHeader>
+              <Textarea
+                value={forceResolveNote}
+                onChange={(e) => setForceResolveNote(e.target.value)}
+                rows={4}
+                placeholder="Bijv. 'Telefonisch akkoord met ondernemer op 18-05; aanvullende documentatie n.v.t.'"
+                data-testid="lo-force-resolve-note"
+              />
+              <DialogFooter>
+                <Button variant="ghost" onClick={() => { setForceResolveTarget(null); setForceResolveNote(""); }}>
+                  Annuleren
+                </Button>
+                <Button
+                  onClick={handleForceResolve}
+                  disabled={resolveConditionMutation.isPending}
+                  data-testid="lo-force-resolve-submit"
+                >
+                  {resolveConditionMutation.isPending ? (
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  ) : null}
+                  Forceer oplossen
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
         </TabsContent>
 
         <TabsContent value="memo">

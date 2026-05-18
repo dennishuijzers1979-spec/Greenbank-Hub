@@ -359,6 +359,28 @@ export const ConditionType = {
   non_blocking: "non_blocking",
 } as const;
 
+/**
+ * A dossier condition (a blocking or advisory point to address).
+Conditions have two visibility tracks:
+
+* **Internal** (`requestedAt == null`): visible to the loan officer
+  / admin only. The plain `title`/`description`/`requiredAction`
+  fields contain internal credit/AI wording and MUST NOT be shown
+  to the prospect verbatim.
+* **Requested from prospect** (`requestedAt != null`): the loan
+  officer has explicitly turned the condition into an
+  entrepreneur-facing request. On prospect-facing endpoints the
+  `title`/`description`/`requiredAction` fields are populated
+  with the entrepreneur-friendly copy
+  (`prospectTitle` / `prospectExplanation` / `prospectRequiredAction`).
+
+Derived status (UI-facing):
+  * `open` + `requestedAt == null` → internal only
+  * `open` + `requestedAt != null` → requested_from_prospect
+  * `submitted`                    → submitted_by_prospect
+  * `resolved`                     → resolved
+
+ */
 export interface Condition {
   id: string;
   dossierId: string;
@@ -367,6 +389,11 @@ export interface Condition {
   description: string;
   requiredAction?: string | null;
   status: string;
+  prospectTitle?: string | null;
+  prospectExplanation?: string | null;
+  prospectRequiredAction?: string | null;
+  documentTypeHint?: string | null;
+  requestedAt?: string | null;
   responseText?: string | null;
   responseDocumentId?: string | null;
   responseDocumentFilename?: string | null;
@@ -387,8 +414,48 @@ export interface ConditionResponseInput {
   responseDocumentId?: string | null;
 }
 
+/**
+ * `reviewerNotes` is internal-only and is required when the officer
+chooses to resolve a still-open requested item without a prospect
+response (force-resolve / admin override).
+
+ */
 export interface ConditionResolveInput {
   reviewerNotes?: string | null;
+}
+
+export type RequestAdditionalInfoItemType =
+  | (typeof RequestAdditionalInfoItemType)[keyof typeof RequestAdditionalInfoItemType]
+  | null;
+
+export const RequestAdditionalInfoItemType = {
+  blocking: "blocking",
+  non_blocking: "non_blocking",
+} as const;
+
+export interface RequestAdditionalInfoItem {
+  internalConditionId?: string | null;
+  prospectTitle: string;
+  prospectExplanation: string;
+  prospectRequiredAction: string;
+  documentTypeHint?: string | null;
+  reviewerNotes?: string | null;
+  type?: RequestAdditionalInfoItemType;
+}
+
+/**
+ * Explicitly turn one or more internal conditions (or fresh new
+items) into prospect-facing additional-information requests.
+Each item either references an existing internal condition via
+`internalConditionId` (which will be updated in-place with the
+provided prospect-facing copy and stamped as requested) or
+omits the id to create a brand-new requested condition.
+Sends the dossier into `additional_info_requested`.
+
+ */
+export interface RequestAdditionalInfoInput {
+  /** @minItems 1 */
+  items: RequestAdditionalInfoItem[];
 }
 
 export type DecisionRequestDecision =
@@ -572,6 +639,11 @@ export type DownloadDocument404 = {
 
 export type GetDualViewAdvice404 = {
   error: string;
+};
+
+export type RequestAdditionalInfo200 = {
+  dossier: Dossier;
+  conditions: Condition[];
 };
 
 export type ListRecentActivityParams = {

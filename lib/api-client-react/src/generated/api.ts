@@ -49,6 +49,8 @@ import type {
   PartnerInput,
   PartnerSubmission,
   PartnerSubmissionRequest,
+  RequestAdditionalInfo200,
+  RequestAdditionalInfoInput,
 } from "./api.schemas";
 
 import { customFetch } from "../custom-fetch";
@@ -2490,6 +2492,103 @@ export const useResolveCondition = <
   TContext
 > => {
   return useMutation(getResolveConditionMutationOptions(options));
+};
+
+/**
+ * @summary Loan officer turns one or more (internal) conditions into clear
+prospect-facing additional-information requests and sends the
+dossier into additional_info_requested.
+
+ */
+export const getRequestAdditionalInfoUrl = (dossierId: string) => {
+  return `/api/dossiers/${dossierId}/request-additional-info`;
+};
+
+export const requestAdditionalInfo = async (
+  dossierId: string,
+  requestAdditionalInfoInput: RequestAdditionalInfoInput,
+  options?: RequestInit,
+): Promise<RequestAdditionalInfo200> => {
+  return customFetch<RequestAdditionalInfo200>(
+    getRequestAdditionalInfoUrl(dossierId),
+    {
+      ...options,
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...options?.headers },
+      body: JSON.stringify(requestAdditionalInfoInput),
+    },
+  );
+};
+
+export const getRequestAdditionalInfoMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof requestAdditionalInfo>>,
+    TError,
+    { dossierId: string; data: BodyType<RequestAdditionalInfoInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof requestAdditionalInfo>>,
+  TError,
+  { dossierId: string; data: BodyType<RequestAdditionalInfoInput> },
+  TContext
+> => {
+  const mutationKey = ["requestAdditionalInfo"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof requestAdditionalInfo>>,
+    { dossierId: string; data: BodyType<RequestAdditionalInfoInput> }
+  > = (props) => {
+    const { dossierId, data } = props ?? {};
+
+    return requestAdditionalInfo(dossierId, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type RequestAdditionalInfoMutationResult = NonNullable<
+  Awaited<ReturnType<typeof requestAdditionalInfo>>
+>;
+export type RequestAdditionalInfoMutationBody =
+  BodyType<RequestAdditionalInfoInput>;
+export type RequestAdditionalInfoMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Loan officer turns one or more (internal) conditions into clear
+prospect-facing additional-information requests and sends the
+dossier into additional_info_requested.
+
+ */
+export const useRequestAdditionalInfo = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof requestAdditionalInfo>>,
+    TError,
+    { dossierId: string; data: BodyType<RequestAdditionalInfoInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof requestAdditionalInfo>>,
+  TError,
+  { dossierId: string; data: BodyType<RequestAdditionalInfoInput> },
+  TContext
+> => {
+  return useMutation(getRequestAdditionalInfoMutationOptions(options));
 };
 
 /**

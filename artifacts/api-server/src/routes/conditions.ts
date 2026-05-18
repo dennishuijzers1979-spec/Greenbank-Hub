@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { eq, desc, and, ne } from "drizzle-orm";
+import { eq, desc, and, ne, or, isNotNull, inArray } from "drizzle-orm";
 import {
   db,
   conditionsTable,
@@ -13,6 +13,8 @@ import {
   RespondToConditionBody,
   ResolveConditionParams,
   ResolveConditionBody,
+  RequestAdditionalInfoParams,
+  RequestAdditionalInfoBody,
 } from "@workspace/api-zod";
 import { requireAuth } from "../lib/auth";
 import { logActivity } from "../lib/activity";
@@ -43,11 +45,26 @@ router.get("/dossiers/me/conditions", requireAuth(["prospect"]), async (req, res
     res.json([]);
     return;
   }
-  const items = await db
+  // Critical visibility rule: the prospect only sees conditions that
+  // the loan officer has explicitly requested from them (requestedAt
+  // non-null). Backward compat: if the dossier is in
+  // "additional_info_requested" status AND no row carries an explicit
+  // requestedAt stamp, treat ALL of its conditions as effectively
+  // requested (legacy decision flow without per-row stamping).
+  // The moment a single row has been explicitly requested, the rest
+  // are considered internal-only — internal credit wording MUST NOT
+  // leak alongside an explicit request.
+  const allDossierConditions = await db
     .select()
     .from(conditionsTable)
     .where(eq(conditionsTable.dossierId, dossier.id))
     .orderBy(desc(conditionsTable.createdAt));
+  const anyExplicitlyRequested = allDossierConditions.some((c) => c.requestedAt);
+  const legacyBatch =
+    dossier.status === "additional_info_requested" && !anyExplicitlyRequested;
+  const items = legacyBatch
+    ? allDossierConditions
+    : allDossierConditions.filter((c) => c.requestedAt);
 
   // Resolve any linked response document filenames in one batched query
   // so the prospect UI can show "uploaded as X.pdf" without an extra
@@ -176,6 +193,27 @@ router.post(
       res.status(404).json({ error: "Voorwaarde niet gevonden" });
       return;
     }
+    // Reject responses to internal-only conditions — the prospect
+    // should not even know about them, so 404 (consistent with the
+    // visibility filter on the list endpoint). Backward-compat
+    // mirror of the visibility rule above: only treat un-stamped rows
+    // as requested when the dossier is the all-legacy batch case
+    // (status = additional_info_requested AND no sibling row has been
+    // explicitly stamped).
+    if (!row.condition.requestedAt) {
+      if (row.dossier.status !== "additional_info_requested") {
+        res.status(404).json({ error: "Voorwaarde niet gevonden" });
+        return;
+      }
+      const siblings = await db
+        .select({ requestedAt: conditionsTable.requestedAt })
+        .from(conditionsTable)
+        .where(eq(conditionsTable.dossierId, row.condition.dossierId));
+      if (siblings.some((s) => s.requestedAt)) {
+        res.status(404).json({ error: "Voorwaarde niet gevonden" });
+        return;
+      }
+    }
     if (row.condition.status === "resolved") {
       res.status(409).json({
         error: "Reeds afgehandeld",
@@ -300,11 +338,18 @@ router.post(
       });
       return;
     }
-    if (row.condition.status === "open") {
+    // Force-resolve override: the loan officer / admin MAY accept an
+    // open (un-responded) requested item, but only when they record an
+    // explicit internal reviewer note explaining why. This matches
+    // requirement 6 — "Markeer als opgelost only after there is a
+    // response, unless admin/loan officer explicitly resolves without
+    // response with reviewer note".
+    const reviewerNote = body.data.reviewerNotes?.trim() ?? null;
+    if (row.condition.status === "open" && !reviewerNote) {
       res.status(409).json({
         error: "Geen reactie aanwezig",
         message:
-          "De ondernemer heeft nog niet gereageerd op dit punt — wacht op een reactie of pas het besluit aan.",
+          "De ondernemer heeft nog niet gereageerd op dit punt — wacht op een reactie, of forceer afhandeling door een interne reviewer-notitie mee te sturen.",
       });
       return;
     }
@@ -315,7 +360,7 @@ router.post(
         status: "resolved",
         resolvedAt: new Date(),
         resolvedBy: req.user!.id,
-        reviewerNotes: body.data.reviewerNotes ?? row.condition.reviewerNotes,
+        reviewerNotes: reviewerNote ?? row.condition.reviewerNotes,
       })
       .where(eq(conditionsTable.id, params.data.conditionId))
       .returning();
@@ -341,6 +386,187 @@ router.post(
     res.json(
       serializeConditionForOfficer(updated, { responseDocumentFilename: filename }),
     );
+  },
+);
+
+/**
+ * Loan officer / admin explicitly turns one or more (optionally
+ * existing internal) conditions into prospect-facing additional-info
+ * requests. Each item carries the rewritten entrepreneur-friendly
+ * copy (title / explanation / required action). When an
+ * `internalConditionId` is supplied, the existing condition is
+ * updated in-place (so its history and id are preserved); otherwise
+ * a new requested condition is created. In both cases `requestedAt`
+ * and `requestedBy` are stamped, making the item visible to the
+ * prospect via /dossiers/me/conditions. The dossier itself is moved
+ * into `additional_info_requested` so the existing partner-submission
+ * and return-to-review flows keep working unchanged.
+ */
+router.post(
+  "/dossiers/:dossierId/request-additional-info",
+  requireAuth(["loan_officer", "admin"]),
+  async (req, res): Promise<void> => {
+    const params = RequestAdditionalInfoParams.safeParse(req.params);
+    if (!params.success) {
+      res.status(400).json({ error: params.error.message });
+      return;
+    }
+    const body = RequestAdditionalInfoBody.safeParse(req.body);
+    if (!body.success) {
+      res.status(400).json({ error: body.error.message });
+      return;
+    }
+    if (!(await officerCanAccessDossier(params.data.dossierId))) {
+      res.status(404).json({ error: "Dossier niet gevonden" });
+      return;
+    }
+
+    const [dossier] = await db
+      .select()
+      .from(dossiersTable)
+      .where(eq(dossiersTable.id, params.data.dossierId))
+      .limit(1);
+    if (!dossier) {
+      res.status(404).json({ error: "Dossier niet gevonden" });
+      return;
+    }
+
+    const now = new Date();
+    const writtenIds: string[] = [];
+    for (const item of body.data.items) {
+      const pTitle = item.prospectTitle.trim();
+      const pExplanation = item.prospectExplanation.trim();
+      const pAction = item.prospectRequiredAction.trim();
+      if (!pTitle || !pExplanation || !pAction) {
+        res.status(400).json({
+          error: "Lege velden",
+          message:
+            "Titel, toelichting en gevraagde actie zijn verplicht voor elk gevraagd punt.",
+        });
+        return;
+      }
+
+      if (item.internalConditionId) {
+        // Update existing condition. Verify ownership of the row
+        // matches the same dossier to prevent cross-dossier writes.
+        const [existing] = await db
+          .select()
+          .from(conditionsTable)
+          .where(eq(conditionsTable.id, item.internalConditionId))
+          .limit(1);
+        if (!existing || existing.dossierId !== dossier.id) {
+          res.status(404).json({
+            error: "Voorwaarde niet gevonden",
+            message:
+              "Een interne voorwaarde uit je verzoek bestaat niet of hoort niet bij dit dossier.",
+          });
+          return;
+        }
+        // Idempotency: do not re-request items that are already
+        // submitted or resolved.
+        if (existing.status !== "open") {
+          res.status(409).json({
+            error: "Status verkeerd",
+            message:
+              "Een van de geselecteerde voorwaarden is al in behandeling of opgelost.",
+          });
+          return;
+        }
+        const [updated] = await db
+          .update(conditionsTable)
+          .set({
+            prospectTitle: pTitle,
+            prospectExplanation: pExplanation,
+            prospectRequiredAction: pAction,
+            documentTypeHint: item.documentTypeHint ?? existing.documentTypeHint,
+            reviewerNotes: item.reviewerNotes ?? existing.reviewerNotes,
+            requestedAt: existing.requestedAt ?? now,
+            requestedBy: existing.requestedBy ?? req.user!.id,
+          })
+          .where(eq(conditionsTable.id, item.internalConditionId))
+          .returning();
+        writtenIds.push(updated.id);
+      } else {
+        const [created] = await db
+          .insert(conditionsTable)
+          .values({
+            dossierId: dossier.id,
+            type: item.type ?? "blocking",
+            // Mirror the prospect-facing copy into the internal columns
+            // when the LO drafted a brand-new request from scratch —
+            // there is no separate internal credit wording in that
+            // case.
+            title: pTitle,
+            description: pExplanation,
+            requiredAction: pAction,
+            status: "open",
+            prospectTitle: pTitle,
+            prospectExplanation: pExplanation,
+            prospectRequiredAction: pAction,
+            documentTypeHint: item.documentTypeHint ?? null,
+            reviewerNotes: item.reviewerNotes ?? null,
+            requestedAt: now,
+            requestedBy: req.user!.id,
+          })
+          .returning();
+        writtenIds.push(created.id);
+      }
+    }
+
+    // Push the dossier into additional_info_requested if it isn't
+    // already there. We do NOT downgrade dossiers that are further
+    // along (e.g. approved) — that case is rejected by the existing
+    // status enum the LO UI would never hit anyway.
+    const [updatedDossier] = await db
+      .update(dossiersTable)
+      .set({
+        status: "additional_info_requested",
+        updatedAt: new Date(),
+      })
+      .where(eq(dossiersTable.id, dossier.id))
+      .returning();
+
+    const written = await db
+      .select()
+      .from(conditionsTable)
+      .where(inArray(conditionsTable.id, writtenIds));
+
+    await logActivity({
+      dossierId: dossier.id,
+      actor: req.user!,
+      action: "additional_info_requested",
+      description: `Kredietacceptant heeft ${written.length} aanvullend(e) verzoek(en) klaargezet voor de ondernemer.`,
+      metadata: {
+        previousStatus: dossier.status,
+        nextStatus: "additional_info_requested",
+        conditionIds: writtenIds,
+      },
+    });
+
+    // We don't bother resolving response-document filenames here — the
+    // brand-new requested items have no response yet by definition.
+    const [prospect] = await db
+      .select()
+      .from(prospectProfilesTable)
+      .where(eq(prospectProfilesTable.id, dossier.prospectId))
+      .limit(1);
+
+    res.json({
+      dossier: {
+        id: updatedDossier.id,
+        status: updatedDossier.status,
+        prospectId: updatedDossier.prospectId,
+        updatedAt: updatedDossier.updatedAt.toISOString(),
+        prospect: prospect
+          ? {
+              id: prospect.id,
+              companyName: prospect.companyName,
+              contactName: prospect.contactName,
+            }
+          : null,
+      },
+      conditions: written.map((c) => serializeConditionForOfficer(c)),
+    });
   },
 );
 

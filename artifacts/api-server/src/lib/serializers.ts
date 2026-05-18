@@ -260,7 +260,57 @@ export function serializeRunForProspect(r: DbRun) {
  * `responseDocumentFilename` may be passed in by the caller when the
  * linked document has been resolved.
  */
+/**
+ * Serialize a condition for a prospect (or any non-officer caller).
+ *
+ * The prospect-facing variant uses the rewritten entrepreneur-friendly
+ * copy (prospectTitle / prospectExplanation / prospectRequiredAction) as
+ * the canonical title/description/requiredAction so the prospect never
+ * sees raw internal credit/AI wording. Internal-only fields
+ * (reviewerNotes, the raw internal title/description) are stripped.
+ *
+ * For backward compatibility with rows created by the older decision
+ * flow that do not yet carry prospect-facing copy, we fall back to the
+ * internal text — those rows historically already were the prospect
+ * wording.
+ */
 export function serializeCondition(
+  c: DbCondition,
+  opts: { responseDocumentFilename?: string | null } = {},
+) {
+  const pTitle = c.prospectTitle ?? c.title;
+  const pExplanation = c.prospectExplanation ?? c.description;
+  const pAction = c.prospectRequiredAction ?? c.requiredAction;
+  return {
+    id: c.id,
+    dossierId: c.dossierId,
+    type: c.type,
+    title: pTitle,
+    description: pExplanation,
+    requiredAction: pAction,
+    status: c.status,
+    prospectTitle: pTitle,
+    prospectExplanation: pExplanation,
+    prospectRequiredAction: pAction,
+    documentTypeHint: c.documentTypeHint ?? null,
+    requestedAt: iso(c.requestedAt),
+    responseText: c.responseText ?? null,
+    responseDocumentId: c.responseDocumentId ?? null,
+    responseDocumentFilename: opts.responseDocumentFilename ?? null,
+    respondedAt: iso(c.respondedAt),
+    resolvedAt: iso(c.resolvedAt),
+    reviewerNotes: null as string | null,
+    createdAt: isoReq(c.createdAt),
+  };
+}
+
+/**
+ * Serialize for loan officer / admin: exposes BOTH the internal credit
+ * wording (title/description/requiredAction) AND the prospect-facing
+ * copy (prospectTitle/...) plus reviewerNotes. This is the only variant
+ * that exposes raw internal text.
+ */
+export function serializeConditionForOfficer(
   c: DbCondition,
   opts: { responseDocumentFilename?: string | null } = {},
 ) {
@@ -272,23 +322,18 @@ export function serializeCondition(
     description: c.description,
     requiredAction: c.requiredAction,
     status: c.status,
+    prospectTitle: c.prospectTitle ?? null,
+    prospectExplanation: c.prospectExplanation ?? null,
+    prospectRequiredAction: c.prospectRequiredAction ?? null,
+    documentTypeHint: c.documentTypeHint ?? null,
+    requestedAt: iso(c.requestedAt),
     responseText: c.responseText ?? null,
     responseDocumentId: c.responseDocumentId ?? null,
     responseDocumentFilename: opts.responseDocumentFilename ?? null,
     respondedAt: iso(c.respondedAt),
     resolvedAt: iso(c.resolvedAt),
-    reviewerNotes: null as string | null,
-    createdAt: isoReq(c.createdAt),
-  };
-}
-
-export function serializeConditionForOfficer(
-  c: DbCondition,
-  opts: { responseDocumentFilename?: string | null } = {},
-) {
-  return {
-    ...serializeCondition(c, opts),
     reviewerNotes: c.reviewerNotes ?? null,
+    createdAt: isoReq(c.createdAt),
   };
 }
 

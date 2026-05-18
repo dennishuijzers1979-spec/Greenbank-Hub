@@ -512,6 +512,38 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Condition" }
 
+  /dossiers/{dossierId}/request-additional-info:
+    post:
+      operationId: requestAdditionalInfo
+      tags: [conditions]
+      summary: |
+        Loan officer turns one or more (internal) conditions into clear
+        prospect-facing additional-information requests and sends the
+        dossier into additional_info_requested.
+      parameters:
+        - in: path
+          name: dossierId
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RequestAdditionalInfoInput" }
+      responses:
+        "200":
+          description: The conditions that were requested
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  dossier: { $ref: "#/components/schemas/Dossier" }
+                  conditions:
+                    type: array
+                    items: { $ref: "#/components/schemas/Condition" }
+                required: [dossier, conditions]
+
   /dossiers/{dossierId}/return-to-review:
     post:
       operationId: returnDossierToReview
@@ -1188,6 +1220,26 @@ components:
 
     Condition:
       type: object
+      description: |
+        A dossier condition (a blocking or advisory point to address).
+        Conditions have two visibility tracks:
+
+        * **Internal** (`requestedAt == null`): visible to the loan officer
+          / admin only. The plain `title`/`description`/`requiredAction`
+          fields contain internal credit/AI wording and MUST NOT be shown
+          to the prospect verbatim.
+        * **Requested from prospect** (`requestedAt != null`): the loan
+          officer has explicitly turned the condition into an
+          entrepreneur-facing request. On prospect-facing endpoints the
+          `title`/`description`/`requiredAction` fields are populated
+          with the entrepreneur-friendly copy
+          (`prospectTitle` / `prospectExplanation` / `prospectRequiredAction`).
+
+        Derived status (UI-facing):
+          * `open` + `requestedAt == null` → internal only
+          * `open` + `requestedAt != null` → requested_from_prospect
+          * `submitted`                    → submitted_by_prospect
+          * `resolved`                     → resolved
       properties:
         id: { type: string }
         dossierId: { type: string }
@@ -1196,6 +1248,14 @@ components:
         description: { type: string }
         requiredAction: { type: string, nullable: true }
         status: { type: string }
+        # Prospect-facing copy. Populated for both prospect and officer
+        # views when the condition has been requested. On the officer
+        # view these may be null when the condition is internal-only.
+        prospectTitle: { type: string, nullable: true }
+        prospectExplanation: { type: string, nullable: true }
+        prospectRequiredAction: { type: string, nullable: true }
+        documentTypeHint: { type: string, nullable: true }
+        requestedAt: { type: string, nullable: true }
         responseText: { type: string, nullable: true }
         responseDocumentId: { type: string, nullable: true }
         responseDocumentFilename: { type: string, nullable: true }
@@ -1219,8 +1279,41 @@ components:
 
     ConditionResolveInput:
       type: object
+      description: |
+        `reviewerNotes` is internal-only and is required when the officer
+        chooses to resolve a still-open requested item without a prospect
+        response (force-resolve / admin override).
       properties:
         reviewerNotes: { type: string, nullable: true }
+
+    RequestAdditionalInfoInput:
+      type: object
+      description: |
+        Explicitly turn one or more internal conditions (or fresh new
+        items) into prospect-facing additional-information requests.
+        Each item either references an existing internal condition via
+        `internalConditionId` (which will be updated in-place with the
+        provided prospect-facing copy and stamped as requested) or
+        omits the id to create a brand-new requested condition.
+        Sends the dossier into `additional_info_requested`.
+      properties:
+        items:
+          type: array
+          minItems: 1
+          items: { $ref: "#/components/schemas/RequestAdditionalInfoItem" }
+      required: [items]
+
+    RequestAdditionalInfoItem:
+      type: object
+      properties:
+        internalConditionId: { type: string, nullable: true }
+        prospectTitle: { type: string }
+        prospectExplanation: { type: string }
+        prospectRequiredAction: { type: string }
+        documentTypeHint: { type: string, nullable: true }
+        reviewerNotes: { type: string, nullable: true }
+        type: { type: string, enum: [blocking, non_blocking], nullable: true }
+      required: [prospectTitle, prospectExplanation, prospectRequiredAction]
 
     DecisionRequest:
       type: object

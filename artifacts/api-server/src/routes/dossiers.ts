@@ -296,6 +296,13 @@ router.post("/dossiers/:dossierId/decision", requireAuth(["loan_officer", "admin
   } else {
     nextStatus = "additional_info_requested";
     actionLabel = "aanvullende informatie gevraagd";
+    // Backward-compatible path: items provided through the legacy
+    // decision flow are treated as already prospect-facing — we copy
+    // the same string into both the internal and prospect-facing
+    // columns and stamp them as requested so they show up for the
+    // prospect (preserving existing /dossiers/me/conditions behavior
+    // and existing decisions test coverage).
+    const now = new Date();
     for (const item of body.data.requestedItems!) {
       await db.insert(conditionsTable).values({
         dossierId: dossier.id,
@@ -304,6 +311,11 @@ router.post("/dossiers/:dossierId/decision", requireAuth(["loan_officer", "admin
         description: item,
         requiredAction: item,
         status: "open",
+        prospectTitle: item,
+        prospectExplanation: item,
+        prospectRequiredAction: item,
+        requestedAt: now,
+        requestedBy: req.user!.id,
       });
     }
   }

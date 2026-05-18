@@ -882,43 +882,61 @@ export const ListConditionsParams = zod.object({
   dossierId: zod.coerce.string(),
 });
 
-export const ListConditionsResponseItem = zod.object({
-  id: zod.string(),
-  dossierId: zod.string(),
-  type: zod.enum(["blocking", "non_blocking"]),
-  title: zod.string(),
-  description: zod.string(),
-  requiredAction: zod.string().nullish(),
-  status: zod.string(),
-  responseText: zod.string().nullish(),
-  responseDocumentId: zod.string().nullish(),
-  responseDocumentFilename: zod.string().nullish(),
-  respondedAt: zod.string().nullish(),
-  resolvedAt: zod.string().nullish(),
-  reviewerNotes: zod.string().nullish(),
-  createdAt: zod.string(),
-});
+export const ListConditionsResponseItem = zod
+  .object({
+    id: zod.string(),
+    dossierId: zod.string(),
+    type: zod.enum(["blocking", "non_blocking"]),
+    title: zod.string(),
+    description: zod.string(),
+    requiredAction: zod.string().nullish(),
+    status: zod.string(),
+    prospectTitle: zod.string().nullish(),
+    prospectExplanation: zod.string().nullish(),
+    prospectRequiredAction: zod.string().nullish(),
+    documentTypeHint: zod.string().nullish(),
+    requestedAt: zod.string().nullish(),
+    responseText: zod.string().nullish(),
+    responseDocumentId: zod.string().nullish(),
+    responseDocumentFilename: zod.string().nullish(),
+    respondedAt: zod.string().nullish(),
+    resolvedAt: zod.string().nullish(),
+    reviewerNotes: zod.string().nullish(),
+    createdAt: zod.string(),
+  })
+  .describe(
+    "A dossier condition (a blocking or advisory point to address).\nConditions have two visibility tracks:\n\n\* \*\*Internal\*\* (`requestedAt == null`): visible to the loan officer\n  \/ admin only. The plain `title`\/`description`\/`requiredAction`\n  fields contain internal credit\/AI wording and MUST NOT be shown\n  to the prospect verbatim.\n\* \*\*Requested from prospect\*\* (`requestedAt != null`): the loan\n  officer has explicitly turned the condition into an\n  entrepreneur-facing request. On prospect-facing endpoints the\n  `title`\/`description`\/`requiredAction` fields are populated\n  with the entrepreneur-friendly copy\n  (`prospectTitle` \/ `prospectExplanation` \/ `prospectRequiredAction`).\n\nDerived status (UI-facing):\n  \* `open` + `requestedAt == null` → internal only\n  \* `open` + `requestedAt != null` → requested_from_prospect\n  \* `submitted`                    → submitted_by_prospect\n  \* `resolved`                     → resolved\n",
+  );
 export const ListConditionsResponse = zod.array(ListConditionsResponseItem);
 
 /**
  * @summary List conditions for the prospect's own dossier
  */
-export const ListMyConditionsResponseItem = zod.object({
-  id: zod.string(),
-  dossierId: zod.string(),
-  type: zod.enum(["blocking", "non_blocking"]),
-  title: zod.string(),
-  description: zod.string(),
-  requiredAction: zod.string().nullish(),
-  status: zod.string(),
-  responseText: zod.string().nullish(),
-  responseDocumentId: zod.string().nullish(),
-  responseDocumentFilename: zod.string().nullish(),
-  respondedAt: zod.string().nullish(),
-  resolvedAt: zod.string().nullish(),
-  reviewerNotes: zod.string().nullish(),
-  createdAt: zod.string(),
-});
+export const ListMyConditionsResponseItem = zod
+  .object({
+    id: zod.string(),
+    dossierId: zod.string(),
+    type: zod.enum(["blocking", "non_blocking"]),
+    title: zod.string(),
+    description: zod.string(),
+    requiredAction: zod.string().nullish(),
+    status: zod.string(),
+    prospectTitle: zod.string().nullish(),
+    prospectExplanation: zod.string().nullish(),
+    prospectRequiredAction: zod.string().nullish(),
+    documentTypeHint: zod.string().nullish(),
+    requestedAt: zod.string().nullish(),
+    responseText: zod.string().nullish(),
+    responseDocumentId: zod.string().nullish(),
+    responseDocumentFilename: zod.string().nullish(),
+    respondedAt: zod.string().nullish(),
+    resolvedAt: zod.string().nullish(),
+    reviewerNotes: zod.string().nullish(),
+    createdAt: zod.string(),
+  })
+  .describe(
+    "A dossier condition (a blocking or advisory point to address).\nConditions have two visibility tracks:\n\n\* \*\*Internal\*\* (`requestedAt == null`): visible to the loan officer\n  \/ admin only. The plain `title`\/`description`\/`requiredAction`\n  fields contain internal credit\/AI wording and MUST NOT be shown\n  to the prospect verbatim.\n\* \*\*Requested from prospect\*\* (`requestedAt != null`): the loan\n  officer has explicitly turned the condition into an\n  entrepreneur-facing request. On prospect-facing endpoints the\n  `title`\/`description`\/`requiredAction` fields are populated\n  with the entrepreneur-friendly copy\n  (`prospectTitle` \/ `prospectExplanation` \/ `prospectRequiredAction`).\n\nDerived status (UI-facing):\n  \* `open` + `requestedAt == null` → internal only\n  \* `open` + `requestedAt != null` → requested_from_prospect\n  \* `submitted`                    → submitted_by_prospect\n  \* `resolved`                     → resolved\n",
+  );
 export const ListMyConditionsResponse = zod.array(ListMyConditionsResponseItem);
 
 /**
@@ -937,22 +955,31 @@ export const RespondToConditionBody = zod
     "At least one of `responseText` or `responseDocumentId` must be\nprovided. The document (if provided) must already belong to the\nprospect's own dossier.\n",
   );
 
-export const RespondToConditionResponse = zod.object({
-  id: zod.string(),
-  dossierId: zod.string(),
-  type: zod.enum(["blocking", "non_blocking"]),
-  title: zod.string(),
-  description: zod.string(),
-  requiredAction: zod.string().nullish(),
-  status: zod.string(),
-  responseText: zod.string().nullish(),
-  responseDocumentId: zod.string().nullish(),
-  responseDocumentFilename: zod.string().nullish(),
-  respondedAt: zod.string().nullish(),
-  resolvedAt: zod.string().nullish(),
-  reviewerNotes: zod.string().nullish(),
-  createdAt: zod.string(),
-});
+export const RespondToConditionResponse = zod
+  .object({
+    id: zod.string(),
+    dossierId: zod.string(),
+    type: zod.enum(["blocking", "non_blocking"]),
+    title: zod.string(),
+    description: zod.string(),
+    requiredAction: zod.string().nullish(),
+    status: zod.string(),
+    prospectTitle: zod.string().nullish(),
+    prospectExplanation: zod.string().nullish(),
+    prospectRequiredAction: zod.string().nullish(),
+    documentTypeHint: zod.string().nullish(),
+    requestedAt: zod.string().nullish(),
+    responseText: zod.string().nullish(),
+    responseDocumentId: zod.string().nullish(),
+    responseDocumentFilename: zod.string().nullish(),
+    respondedAt: zod.string().nullish(),
+    resolvedAt: zod.string().nullish(),
+    reviewerNotes: zod.string().nullish(),
+    createdAt: zod.string(),
+  })
+  .describe(
+    "A dossier condition (a blocking or advisory point to address).\nConditions have two visibility tracks:\n\n\* \*\*Internal\*\* (`requestedAt == null`): visible to the loan officer\n  \/ admin only. The plain `title`\/`description`\/`requiredAction`\n  fields contain internal credit\/AI wording and MUST NOT be shown\n  to the prospect verbatim.\n\* \*\*Requested from prospect\*\* (`requestedAt != null`): the loan\n  officer has explicitly turned the condition into an\n  entrepreneur-facing request. On prospect-facing endpoints the\n  `title`\/`description`\/`requiredAction` fields are populated\n  with the entrepreneur-friendly copy\n  (`prospectTitle` \/ `prospectExplanation` \/ `prospectRequiredAction`).\n\nDerived status (UI-facing):\n  \* `open` + `requestedAt == null` → internal only\n  \* `open` + `requestedAt != null` → requested_from_prospect\n  \* `submitted`                    → submitted_by_prospect\n  \* `resolved`                     → resolved\n",
+  );
 
 /**
  * @summary Loan officer / admin marks a submitted condition as resolved
@@ -961,25 +988,159 @@ export const ResolveConditionParams = zod.object({
   conditionId: zod.coerce.string(),
 });
 
-export const ResolveConditionBody = zod.object({
-  reviewerNotes: zod.string().nullish(),
+export const ResolveConditionBody = zod
+  .object({
+    reviewerNotes: zod.string().nullish(),
+  })
+  .describe(
+    "`reviewerNotes` is internal-only and is required when the officer\nchooses to resolve a still-open requested item without a prospect\nresponse (force-resolve \/ admin override).\n",
+  );
+
+export const ResolveConditionResponse = zod
+  .object({
+    id: zod.string(),
+    dossierId: zod.string(),
+    type: zod.enum(["blocking", "non_blocking"]),
+    title: zod.string(),
+    description: zod.string(),
+    requiredAction: zod.string().nullish(),
+    status: zod.string(),
+    prospectTitle: zod.string().nullish(),
+    prospectExplanation: zod.string().nullish(),
+    prospectRequiredAction: zod.string().nullish(),
+    documentTypeHint: zod.string().nullish(),
+    requestedAt: zod.string().nullish(),
+    responseText: zod.string().nullish(),
+    responseDocumentId: zod.string().nullish(),
+    responseDocumentFilename: zod.string().nullish(),
+    respondedAt: zod.string().nullish(),
+    resolvedAt: zod.string().nullish(),
+    reviewerNotes: zod.string().nullish(),
+    createdAt: zod.string(),
+  })
+  .describe(
+    "A dossier condition (a blocking or advisory point to address).\nConditions have two visibility tracks:\n\n\* \*\*Internal\*\* (`requestedAt == null`): visible to the loan officer\n  \/ admin only. The plain `title`\/`description`\/`requiredAction`\n  fields contain internal credit\/AI wording and MUST NOT be shown\n  to the prospect verbatim.\n\* \*\*Requested from prospect\*\* (`requestedAt != null`): the loan\n  officer has explicitly turned the condition into an\n  entrepreneur-facing request. On prospect-facing endpoints the\n  `title`\/`description`\/`requiredAction` fields are populated\n  with the entrepreneur-friendly copy\n  (`prospectTitle` \/ `prospectExplanation` \/ `prospectRequiredAction`).\n\nDerived status (UI-facing):\n  \* `open` + `requestedAt == null` → internal only\n  \* `open` + `requestedAt != null` → requested_from_prospect\n  \* `submitted`                    → submitted_by_prospect\n  \* `resolved`                     → resolved\n",
+  );
+
+/**
+ * @summary Loan officer turns one or more (internal) conditions into clear
+prospect-facing additional-information requests and sends the
+dossier into additional_info_requested.
+
+ */
+export const RequestAdditionalInfoParams = zod.object({
+  dossierId: zod.coerce.string(),
 });
 
-export const ResolveConditionResponse = zod.object({
-  id: zod.string(),
-  dossierId: zod.string(),
-  type: zod.enum(["blocking", "non_blocking"]),
-  title: zod.string(),
-  description: zod.string(),
-  requiredAction: zod.string().nullish(),
-  status: zod.string(),
-  responseText: zod.string().nullish(),
-  responseDocumentId: zod.string().nullish(),
-  responseDocumentFilename: zod.string().nullish(),
-  respondedAt: zod.string().nullish(),
-  resolvedAt: zod.string().nullish(),
-  reviewerNotes: zod.string().nullish(),
-  createdAt: zod.string(),
+export const RequestAdditionalInfoBody = zod
+  .object({
+    items: zod
+      .array(
+        zod.object({
+          internalConditionId: zod.string().nullish(),
+          prospectTitle: zod.string(),
+          prospectExplanation: zod.string(),
+          prospectRequiredAction: zod.string(),
+          documentTypeHint: zod.string().nullish(),
+          reviewerNotes: zod.string().nullish(),
+          type: zod.enum(["blocking", "non_blocking"]).nullish(),
+        }),
+      )
+      .min(1),
+  })
+  .describe(
+    "Explicitly turn one or more internal conditions (or fresh new\nitems) into prospect-facing additional-information requests.\nEach item either references an existing internal condition via\n`internalConditionId` (which will be updated in-place with the\nprovided prospect-facing copy and stamped as requested) or\nomits the id to create a brand-new requested condition.\nSends the dossier into `additional_info_requested`.\n",
+  );
+
+export const RequestAdditionalInfoResponse = zod.object({
+  dossier: zod.object({
+    id: zod.string(),
+    prospectId: zod.string(),
+    prospect: zod
+      .object({
+        id: zod.string(),
+        userId: zod.string(),
+        companyName: zod.string(),
+        contactName: zod.string(),
+        kvkNumber: zod.string().nullish(),
+        phone: zod.string().nullish(),
+        source: zod.string().nullish(),
+        pipedriveDealId: zod.string().nullish(),
+        createdAt: zod.string(),
+      })
+      .optional(),
+    status: zod.enum([
+      "lead_created",
+      "account_invited",
+      "prospect_logged_in",
+      "intake_in_progress",
+      "documents_uploaded",
+      "pre_validation_running",
+      "blocked_missing_documents",
+      "blocked_invalid_documents",
+      "ready_for_ai_analysis",
+      "ai_analysis_running",
+      "entrepreneur_report_ready",
+      "submitted_to_geenbank",
+      "loan_officer_review",
+      "additional_info_requested",
+      "approved_for_partner_submission",
+      "rejected_by_loan_officer",
+      "memorandum_generated",
+      "submitted_to_partners",
+      "partner_response_received",
+      "closed",
+    ]),
+    currentStage: zod.string(),
+    financingPurpose: zod.string().nullish(),
+    requestedAmount: zod.number().nullish(),
+    financingTypePreference: zod.string().nullish(),
+    existingFinancing: zod.string().nullish(),
+    annualRevenue: zod.number().nullish(),
+    annualCost: zod.number().nullish(),
+    annualProfit: zod.number().nullish(),
+    companyDescription: zod.string().nullish(),
+    completenessScore: zod.number().nullish(),
+    correctnessScore: zod.number().nullish(),
+    viabilityScore: zod.number().nullish(),
+    confidenceScore: zod.number().nullish(),
+    aiVerdict: zod.string().nullish(),
+    loanOfficerDecision: zod.string().nullish(),
+    loanOfficerNotes: zod.string().nullish(),
+    submittedAt: zod.string().nullish(),
+    createdAt: zod.string(),
+    updatedAt: zod.string(),
+    intakeCompletionPercent: zod.number(),
+    documentsCount: zod.number(),
+    blockingConditionsCount: zod.number(),
+  }),
+  conditions: zod.array(
+    zod
+      .object({
+        id: zod.string(),
+        dossierId: zod.string(),
+        type: zod.enum(["blocking", "non_blocking"]),
+        title: zod.string(),
+        description: zod.string(),
+        requiredAction: zod.string().nullish(),
+        status: zod.string(),
+        prospectTitle: zod.string().nullish(),
+        prospectExplanation: zod.string().nullish(),
+        prospectRequiredAction: zod.string().nullish(),
+        documentTypeHint: zod.string().nullish(),
+        requestedAt: zod.string().nullish(),
+        responseText: zod.string().nullish(),
+        responseDocumentId: zod.string().nullish(),
+        responseDocumentFilename: zod.string().nullish(),
+        respondedAt: zod.string().nullish(),
+        resolvedAt: zod.string().nullish(),
+        reviewerNotes: zod.string().nullish(),
+        createdAt: zod.string(),
+      })
+      .describe(
+        "A dossier condition (a blocking or advisory point to address).\nConditions have two visibility tracks:\n\n\* \*\*Internal\*\* (`requestedAt == null`): visible to the loan officer\n  \/ admin only. The plain `title`\/`description`\/`requiredAction`\n  fields contain internal credit\/AI wording and MUST NOT be shown\n  to the prospect verbatim.\n\* \*\*Requested from prospect\*\* (`requestedAt != null`): the loan\n  officer has explicitly turned the condition into an\n  entrepreneur-facing request. On prospect-facing endpoints the\n  `title`\/`description`\/`requiredAction` fields are populated\n  with the entrepreneur-friendly copy\n  (`prospectTitle` \/ `prospectExplanation` \/ `prospectRequiredAction`).\n\nDerived status (UI-facing):\n  \* `open` + `requestedAt == null` → internal only\n  \* `open` + `requestedAt != null` → requested_from_prospect\n  \* `submitted`                    → submitted_by_prospect\n  \* `resolved`                     → resolved\n",
+      ),
+  ),
 });
 
 /**
