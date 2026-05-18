@@ -48,9 +48,13 @@ env-var confirmations and default to a dry-run summary.
 
 ### `pilot:cleanup` — clean up the loan-officer queue before going live
 
-Removes every prospect user (and cascades their profile, dossier,
-documents, AI runs, conditions, partner submissions and activity logs)
-**except**:
+**Safe by default (fail-closed).** Only prospects with a `seed:*` source
+marker (set by `seed.ts` / `ensureAuroraDemo`) or whose email is in the
+hard-coded `KNOWN_SEED_EMAILS` list are eligible for deletion. Real,
+unmarked prospects are preserved and listed in the plan so you can
+review them.
+
+Always preserved regardless of mode:
 
 - every user with role `admin` or `loan_officer`,
 - every record in `partner_financiers`,
@@ -58,21 +62,30 @@ documents, AI runs, conditions, partner submissions and activity logs)
   unless `--no-preserve-aurora` is passed,
 - any extra email passed via `--preserve-email=foo@bar.nl`.
 
+Deleting a prospect user cascades (via FK `onDelete: cascade`) to its
+profile, dossier, documents, AI runs, conditions, partner submissions
+and dossier-linked activity logs.
+
 Commands:
 
 ```bash
 # Dry-run — shows exactly what would be kept / deleted, deletes nothing.
 pnpm --filter @workspace/scripts run pilot:cleanup:dry-run
 
-# Apply — requires CONFIRM_PILOT_CLEANUP=YES.
+# Apply (safe mode, marker-only) — requires CONFIRM_PILOT_CLEANUP=YES.
 CONFIRM_PILOT_CLEANUP=YES pnpm --filter @workspace/scripts run pilot:cleanup
 
 # Apply without keeping Aurora.
 CONFIRM_PILOT_CLEANUP=YES \
   pnpm --filter @workspace/scripts run pilot:cleanup -- --no-preserve-aurora
+
+# Also remove unmarked non-staff users (broad — use with care). Requires
+# BOTH confirmations.
+CONFIRM_PILOT_CLEANUP=YES CONFIRM_INCLUDE_UNMARKED=YES \
+  pnpm --filter @workspace/scripts run pilot:cleanup -- --include-unmarked
 ```
 
-Without the env var, the apply mode refuses to delete. **Run this only
+Without the env vars, `--apply` refuses to delete. **Run this only
 against the environment you intend to clean** — there is no undo.
 
 ### `demo:reset` — restore the deterministic demo dataset (dev/demo only)

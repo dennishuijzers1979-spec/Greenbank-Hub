@@ -1,12 +1,18 @@
 /**
- * Pilot cleanup tests — guarantees that the allow-list rules in
- * `scripts/src/pilot-cleanup.ts` actually keep the records that must
- * survive (internal staff, partner financiers, Aurora demo when
- * configured) and remove every other prospect dossier.
+ * Pilot cleanup tests — guarantees the safety rules in
+ * `scripts/src/pilot-cleanup.ts`:
+ *  - admins, loan officers and partner financiers are preserved,
+ *  - Aurora is preserved when configured, deleted when configured off,
+ *  - in the default MARKED-ONLY mode, real unmarked prospects survive,
+ *  - --include-unmarked mode does delete unmarked prospects,
+ *  - the CLI refuses to mutate without CONFIRM_PILOT_CLEANUP=YES.
  */
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import { spawnSync } from "node:child_process";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { eq, inArray } from "drizzle-orm";
 
 import {
@@ -24,10 +30,7 @@ import {
   applyPilotCleanup,
 } from "../pilot-cleanup";
 
-// Tests run against the live DEV database; they create + delete only
-// records they own, identified by `pilot-cleanup-test-` email prefixes.
 const TEST_PREFIX = "pilot-cleanup-test-";
-// Cheap, fake password hash — these tests never authenticate.
 const FAKE_HASH = "$2a$04$abcdefghijklmnopqrstuv";
 
 const createdUserIds: string[] = [];
@@ -47,11 +50,26 @@ async function makeUser(role: "admin" | "loan_officer" | "prospect", email?: str
   return u;
 }
 
-async function makeProspectWithDossier(email: string, company: string) {
+/**
+ * Creates a prospect + profile + dossier. By default the profile is
+ * marked `source: "seed:test"` so it is eligible for cleanup in the
+ * safe MARKED-ONLY mode. Pass `markAsSeed=false` to simulate a real
+ * unmarked customer record.
+ */
+async function makeProspectWithDossier(
+  email: string,
+  company: string,
+  opts: { markAsSeed?: boolean } = {},
+) {
   const user = await makeUser("prospect", email);
   const [p] = await db
     .insert(prospectProfilesTable)
-    .values({ userId: user.id, companyName: company, contactName: "Test" })
+    .values({
+      userId: user.id,
+      companyName: company,
+      contactName: "Test",
+      source: opts.markAsSeed === false ? null : "seed:test",
+    })
     .returning();
   await db
     .insert(dossiersTable)
@@ -74,9 +92,7 @@ async function makePartner() {
   return p;
 }
 
-before(async () => {
-  // Tests rely on inspecting the live test DB. No app/server needed.
-});
+before(async () => {});
 
 after(async () => {
   if (createdUserIds.length > 0) {
@@ -93,7 +109,7 @@ after(async () => {
 test("plan preserves admin and loan_officer users", async () => {
   const admin = await makeUser("admin");
   const officer = await makeUser("loan_officer");
-  const plan = await planPilotCleanup({ preserveAurora: true });
+  const plan = await planPilotCleanup({ preserveAurora: true, markedOnly: true });
   const preservedIds = plan.preservedUsers.map((u) => u.id);
   assert.ok(preservedIds.includes(admin.id), "admin must be preserved");
   assert.ok(preservedIds.includes(officer.id), "loan officer must be preserved");
@@ -104,7 +120,7 @@ test("plan preserves admin and loan_officer users", async () => {
 
 test("plan preserves partner financiers untouched", async () => {
   const partner = await makePartner();
-  const plan = await planPilotCleanup({ preserveAurora: true });
+  const plan = await planPilotCleanup({ preserveAurora: true, markedOnly: true });
   assert.ok(plan.preservedPartnerCount >= 1);
   const stillThere = await db
     .select()
@@ -114,23 +130,6 @@ test("plan preserves partner financiers untouched", async () => {
 });
 
 test("plan preserves Aurora when preserveAurora=true", async () => {
-  // Ensure Aurora exists for this test
-  const existing = await db
-    .select()
-    .from(usersTable)
-    .where(eq(usersTable.email, AURORA_EMAIL));
-  if (existing.length === 0) {
-    const u = await makeProspectWithDossier(AURORA_EMAIL, "Aurora Bakkerij B.V.");
-    void u;
-  }
-  const plan = await planPilotCleanup({ preserveAurora: true });
-  const preservedEmails = plan.preservedUsers.map((u) => u.email);
-  assert.ok(preservedEmails.includes(AURORA_EMAIL));
-  const deletedEmails = plan.deletedUsers.map((u) => u.email);
-  assert.ok(!deletedEmails.includes(AURORA_EMAIL));
-});
-
-test("plan deletes Aurora when preserveAurora=false", async () => {
   const existing = await db
     .select()
     .from(usersTable)
@@ -138,26 +137,75 @@ test("plan deletes Aurora when preserveAurora=false", async () => {
   if (existing.length === 0) {
     await makeProspectWithDossier(AURORA_EMAIL, "Aurora Bakkerij B.V.");
   }
-  const plan = await planPilotCleanup({ preserveAurora: false });
+  const plan = await planPilotCleanup({ preserveAurora: true, markedOnly: true });
+  const preservedEmails = plan.preservedUsers.map((u) => u.email);
+  assert.ok(preservedEmails.includes(AURORA_EMAIL));
+  const deletedEmails = plan.deletedUsers.map((u) => u.email);
+  assert.ok(!deletedEmails.includes(AURORA_EMAIL));
+});
+
+test("plan deletes Aurora when preserveAurora=false (via known-seed-email marker)", async () => {
+  const existing = await db
+    .select()
+    .from(usersTable)
+    .where(eq(usersTable.email, AURORA_EMAIL));
+  if (existing.length === 0) {
+    await makeProspectWithDossier(AURORA_EMAIL, "Aurora Bakkerij B.V.");
+  }
+  const plan = await planPilotCleanup({ preserveAurora: false, markedOnly: true });
   const deletedEmails = plan.deletedUsers.map((u) => u.email);
   assert.ok(deletedEmails.includes(AURORA_EMAIL));
 });
 
-test("plan deletes prospect dossiers and their cascade footprint", async () => {
-  const email = `cleanup-test-${randomUUID()}@example.com`;
+test("plan deletes seed-marked prospect dossiers and their cascade footprint", async () => {
+  const email = `${TEST_PREFIX}seed-${randomUUID()}@example.com`;
   const user = await makeProspectWithDossier(email, "Cleanup Test BV");
-  const plan = await planPilotCleanup({ preserveAurora: true });
-  const deletedIds = plan.deletedUsers.map((u) => u.id);
-  assert.ok(deletedIds.includes(user.id));
+  const plan = await planPilotCleanup({ preserveAurora: true, markedOnly: true });
+  const deleted = plan.deletedUsers.find((u) => u.id === user.id);
+  assert.ok(deleted, "seed-marked user must be selected for deletion");
+  assert.equal(deleted!.marker, "seed-source");
   assert.ok(plan.deletedProspectProfiles >= 1);
   assert.ok(plan.deletedDossiers >= 1);
 });
 
+test("MARKED-ONLY mode preserves unmarked real-looking prospects (fail-closed)", async () => {
+  const email = `${TEST_PREFIX}real-${randomUUID()}@example.com`;
+  const real = await makeProspectWithDossier(email, "Echte Klant BV", {
+    markAsSeed: false,
+  });
+  const plan = await planPilotCleanup({ preserveAurora: true, markedOnly: true });
+  const deletedIds = plan.deletedUsers.map((u) => u.id);
+  assert.ok(
+    !deletedIds.includes(real.id),
+    "unmarked prospect must NOT be in delete list under fail-closed default",
+  );
+  const skippedIds = plan.unmarkedSkipped.map((u) => u.id);
+  assert.ok(
+    skippedIds.includes(real.id),
+    "unmarked prospect must appear in unmarkedSkipped",
+  );
+});
+
+test("INCLUDE-UNMARKED mode deletes unmarked prospects too", async () => {
+  const email = `${TEST_PREFIX}unmarked-${randomUUID()}@example.com`;
+  const real = await makeProspectWithDossier(email, "Unmarked BV", {
+    markAsSeed: false,
+  });
+  const plan = await planPilotCleanup({
+    preserveAurora: true,
+    markedOnly: false,
+  });
+  const deleted = plan.deletedUsers.find((u) => u.id === real.id);
+  assert.ok(deleted, "unmarked prospect must be deletable when markedOnly=false");
+  assert.equal(deleted!.marker, "unmarked");
+});
+
 test("plan respects explicit preserveEmails allowlist", async () => {
-  const email = `vip-${randomUUID()}@example.com`;
+  const email = `${TEST_PREFIX}vip-${randomUUID()}@example.com`;
   const vip = await makeProspectWithDossier(email, "VIP BV");
   const plan = await planPilotCleanup({
     preserveAurora: true,
+    markedOnly: true,
     preserveEmails: [email],
   });
   const preservedEmails = plan.preservedUsers.map((u) => u.email);
@@ -167,9 +215,9 @@ test("plan respects explicit preserveEmails allowlist", async () => {
 });
 
 test("dry-run (computing the plan) does not delete anything", async () => {
-  const email = `dryrun-${randomUUID()}@example.com`;
+  const email = `${TEST_PREFIX}dryrun-${randomUUID()}@example.com`;
   const user = await makeProspectWithDossier(email, "DryRun BV");
-  await planPilotCleanup({ preserveAurora: true });
+  await planPilotCleanup({ preserveAurora: true, markedOnly: true });
   const stillThere = await db
     .select()
     .from(usersTable)
@@ -178,12 +226,11 @@ test("dry-run (computing the plan) does not delete anything", async () => {
 });
 
 test("applyPilotCleanup actually removes the planned prospect users", async () => {
-  const email = `apply-${randomUUID()}@example.com`;
+  const email = `${TEST_PREFIX}apply-${randomUUID()}@example.com`;
   const user = await makeProspectWithDossier(email, "Apply Test BV");
   const plan = await planPilotCleanup({
     preserveAurora: true,
-    // Keep every existing user except the one we just made, so this
-    // test does not inadvertently nuke parallel-test fixtures.
+    markedOnly: true,
     preserveEmails: (
       await db.select({ email: usersTable.email }).from(usersTable)
     )
@@ -198,13 +245,38 @@ test("applyPilotCleanup actually removes the planned prospect users", async () =
     .from(usersTable)
     .where(eq(usersTable.id, user.id));
   assert.equal(stillThere.length, 0, "user should be deleted after apply");
-  // Cascade: profile should also be gone.
   const profile = await db
     .select()
     .from(prospectProfilesTable)
     .where(eq(prospectProfilesTable.userId, user.id));
   assert.equal(profile.length, 0);
-  // Strip from tracker since it's already deleted.
   const idx = createdUserIds.indexOf(user.id);
   if (idx >= 0) createdUserIds.splice(idx, 1);
+});
+
+test("CLI: --apply without CONFIRM_PILOT_CLEANUP refuses to mutate", async () => {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const cliPath = resolve(here, "../pilot-cleanup.ts");
+
+  // Create a guaranteed deletion candidate.
+  const email = `${TEST_PREFIX}cli-${randomUUID()}@example.com`;
+  const user = await makeProspectWithDossier(email, "CLI Guard BV");
+
+  const env = { ...process.env };
+  delete env.CONFIRM_PILOT_CLEANUP;
+
+  const res = spawnSync(
+    process.execPath,
+    ["--import", "tsx", cliPath, "--apply", `--preserve-email=${AURORA_EMAIL}`],
+    { encoding: "utf8", env, timeout: 30_000 },
+  );
+  assert.equal(res.status, 2, `expected exit 2, got ${res.status}. stderr: ${res.stderr}`);
+  assert.match(res.stderr, /CONFIRM_PILOT_CLEANUP=YES/);
+
+  // The user must still exist — no deletion happened.
+  const stillThere = await db
+    .select()
+    .from(usersTable)
+    .where(eq(usersTable.id, user.id));
+  assert.equal(stillThere.length, 1, "user must NOT have been deleted by unconfirmed apply");
 });

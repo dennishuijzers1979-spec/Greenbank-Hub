@@ -99,7 +99,7 @@ export async function seedIfEmpty(): Promise<void> {
       contactName: "Anne Jansen",
       kvkNumber: "78213456",
       phone: "+31 6 1234 5678",
-      source: "Geenbank afwijzing",
+      source: "seed:Geenbank afwijzing",
       pipedriveDealId: "deal-1001",
     })
     .returning();
@@ -111,7 +111,7 @@ export async function seedIfEmpty(): Promise<void> {
       contactName: "Joris Bakker",
       kvkNumber: "65498712",
       phone: "+31 6 9876 5432",
-      source: "Geenbank afwijzing",
+      source: "seed:Geenbank afwijzing",
       pipedriveDealId: "deal-1002",
     })
     .returning();
@@ -123,7 +123,7 @@ export async function seedIfEmpty(): Promise<void> {
       contactName: "Fatima El Amrani",
       kvkNumber: "33445566",
       phone: "+31 6 5555 4444",
-      source: "Geenbank afwijzing",
+      source: "seed:Geenbank afwijzing",
       pipedriveDealId: "deal-1003",
     })
     .returning();
@@ -135,7 +135,7 @@ export async function seedIfEmpty(): Promise<void> {
       contactName: "Sanne de Boer",
       kvkNumber: "88991122",
       phone: "+31 6 2233 4455",
-      source: "Geenbank afwijzing",
+      source: "seed:Geenbank afwijzing",
       pipedriveDealId: "deal-1004",
     })
     .returning();
@@ -642,7 +642,7 @@ export async function ensureAuroraDemo(): Promise<void> {
       contactName: "Sanne de Boer",
       kvkNumber: "88991122",
       phone: "+31 6 2233 4455",
-      source: "Geenbank afwijzing",
+      source: "seed:aurora-demo",
       pipedriveDealId: "deal-1004",
     })
     .returning();

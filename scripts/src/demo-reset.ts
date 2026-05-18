@@ -23,12 +23,16 @@ import {
 } from "@workspace/db";
 
 async function wipe(): Promise<void> {
-  // Cascades handle the rest: deleting users removes sessions, profiles,
-  // dossiers, documents, runs, conditions, dossier-linked activity, and
-  // partner_submissions (via dossier cascade).
-  await db.delete(activityLogsTable);
-  await db.delete(partnerFinanciersTable);
-  await db.delete(usersTable);
+  // Wrap in a transaction so a partial failure leaves the DB in its
+  // original state rather than empty.
+  await db.transaction(async (tx) => {
+    // Cascades handle the rest: deleting users removes sessions, profiles,
+    // dossiers, documents, runs, conditions, dossier-linked activity, and
+    // partner_submissions (via dossier cascade).
+    await tx.delete(activityLogsTable);
+    await tx.delete(partnerFinanciersTable);
+    await tx.delete(usersTable);
+  });
 }
 
 async function reseed(): Promise<void> {
