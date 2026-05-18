@@ -11,6 +11,8 @@ import {
   useListDossierSubmissions, getListDossierSubmissionsQueryKey,
   useGetLatestRun, getGetLatestRunQueryKey,
   useGetDualViewAdvice, getGetDualViewAdviceQueryKey,
+  useListConditions, getListConditionsQueryKey,
+  useResolveCondition, useReturnDossierToReview,
 } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
@@ -97,10 +99,66 @@ export default function DossierDetail() {
   const { data: memo } = useGetMemorandum(id, { query: { queryKey: getGetMemorandumQueryKey(id), enabled: !!id, retry: false } });
   const { data: partners } = useListPartners({ query: { queryKey: getListPartnersQueryKey() } });
   const { data: existingSubmissions } = useListDossierSubmissions(id, { query: { queryKey: getListDossierSubmissionsQueryKey(id), enabled: !!id } });
+  const { data: conditions } = useListConditions(id, { query: { queryKey: getListConditionsQueryKey(id), enabled: !!id } });
 
   const decisionMutation = useMakeDossierDecision();
   const memoMutation = useGenerateMemorandum();
   const submitPartnerMutation = useSubmitDossierToPartners();
+  const resolveConditionMutation = useResolveCondition();
+  const returnToReviewMutation = useReturnDossierToReview();
+
+  const handleResolveCondition = (conditionId: string) => {
+    if (resolveConditionMutation.isPending) return;
+    resolveConditionMutation.mutate(
+      { conditionId, data: {} },
+      {
+        onSuccess: () => {
+          queryClient.invalidateQueries({ queryKey: getListConditionsQueryKey(id) });
+          queryClient.invalidateQueries({ queryKey: getGetDossierQueryKey(id) });
+          toast({ title: "Voorwaarde opgelost", description: "De reactie is geaccepteerd." });
+        },
+        onError: (err: unknown) => {
+          const data =
+            err && typeof err === "object" && "data" in err && (err as { data: unknown }).data && typeof (err as { data: unknown }).data === "object"
+              ? ((err as { data: { error?: string; message?: string } }).data ?? {})
+              : {};
+          toast({
+            title: data.error ?? "Kan niet opgelost worden",
+            description: data.message ?? "Probeer het later opnieuw.",
+            variant: "destructive",
+          });
+        },
+      },
+    );
+  };
+
+  const handleReturnToReview = () => {
+    if (returnToReviewMutation.isPending) return;
+    returnToReviewMutation.mutate(
+      { dossierId: id },
+      {
+        onSuccess: () => {
+          queryClient.invalidateQueries({ queryKey: getGetDossierQueryKey(id) });
+          queryClient.invalidateQueries({ queryKey: getListConditionsQueryKey(id) });
+          toast({
+            title: "Dossier teruggezet",
+            description: "Het dossier staat weer in beoordeling.",
+          });
+        },
+        onError: (err: unknown) => {
+          const data =
+            err && typeof err === "object" && "data" in err && (err as { data: unknown }).data && typeof (err as { data: unknown }).data === "object"
+              ? ((err as { data: { error?: string; message?: string } }).data ?? {})
+              : {};
+          toast({
+            title: data.error ?? "Terugzetten mislukt",
+            description: data.message ?? "Probeer het later opnieuw.",
+            variant: "destructive",
+          });
+        },
+      },
+    );
+  };
 
   if (isLoading || !dossier) {
     return <div className="p-8 flex justify-center"><Loader2 className="w-8 h-8 animate-spin text-primary" /></div>;
@@ -355,6 +413,14 @@ export default function DossierDetail() {
           <TabsTrigger value="overview">AI Analyse</TabsTrigger>
           <TabsTrigger value="intake">Intake</TabsTrigger>
           <TabsTrigger value="documents">Documenten</TabsTrigger>
+          <TabsTrigger value="conditions" data-testid="tab-conditions">
+            Voorwaarden
+            {(conditions?.filter(c => c.type === "blocking" && c.status !== "resolved").length ?? 0) > 0 && (
+              <Badge variant="outline" className="ml-1 text-[10px] border-amber-400 text-amber-900">
+                {conditions!.filter(c => c.type === "blocking" && c.status !== "resolved").length}
+              </Badge>
+            )}
+          </TabsTrigger>
           <TabsTrigger value="memo" disabled={!['approved_for_partner_submission', 'memorandum_generated', 'submitted_to_partners'].includes(dossier.status)}>Memorandum</TabsTrigger>
           <TabsTrigger value="partners" disabled={!['approved_for_partner_submission', 'memorandum_generated', 'submitted_to_partners', 'partner_response_received'].includes(dossier.status)}>Partners</TabsTrigger>
         </TabsList>
@@ -795,6 +861,128 @@ export default function DossierDetail() {
                 </div>
               ) : (
                 <p className="text-center py-8 text-muted-foreground">Geen documenten gevonden.</p>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="conditions">
+          <Card>
+            <CardHeader>
+              <CardTitle>Aanvullende voorwaarden &amp; reacties</CardTitle>
+              <CardDescription>
+                Beoordeel de reacties van de prospect op de gevraagde
+                aanvullende informatie. Markeer een reactie als opgelost
+                wanneer deze voldoet. Zodra alle blokkerende voorwaarden
+                opgelost zijn, kun je het dossier terugzetten naar
+                beoordeling.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {!conditions || conditions.length === 0 ? (
+                <p className="text-sm italic text-muted-foreground">
+                  Er zijn geen voorwaarden vastgelegd voor dit dossier.
+                </p>
+              ) : (
+                <>
+                  {(() => {
+                    const blocking = conditions.filter(c => c.type === "blocking");
+                    const open = blocking.filter(c => c.status === "open").length;
+                    const submitted = blocking.filter(c => c.status === "submitted").length;
+                    const resolved = blocking.filter(c => c.status === "resolved").length;
+                    const allResolved = blocking.length > 0 && resolved === blocking.length;
+                    return (
+                      <>
+                        <div className="flex flex-wrap gap-2 text-xs">
+                          <Badge variant="outline" className="border-amber-400 text-amber-900" data-testid="lo-conditions-open-count">
+                            {open} open
+                          </Badge>
+                          <Badge variant="outline" className="border-blue-400 text-blue-900" data-testid="lo-conditions-submitted-count">
+                            {submitted} ingediend
+                          </Badge>
+                          <Badge variant="outline" className="border-green-400 text-green-900" data-testid="lo-conditions-resolved-count">
+                            {resolved} opgelost
+                          </Badge>
+                        </div>
+                        {dossier.status === "additional_info_requested" && (
+                          <div className="flex justify-end">
+                            <Button
+                              size="sm"
+                              onClick={handleReturnToReview}
+                              disabled={!allResolved || returnToReviewMutation.isPending}
+                              data-testid="button-return-to-review"
+                            >
+                              {returnToReviewMutation.isPending ? (
+                                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                              ) : null}
+                              Terugzetten naar beoordeling
+                            </Button>
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
+                  <div className="space-y-3">
+                    {conditions.map(c => (
+                      <div
+                        key={c.id}
+                        data-testid={`lo-condition-${c.id}`}
+                        data-status={c.status}
+                        className="rounded-lg border p-4 space-y-2"
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <h4 className="font-medium">{c.title}</h4>
+                            {c.requiredAction && c.requiredAction !== c.title && (
+                              <p className="text-sm text-muted-foreground">{c.requiredAction}</p>
+                            )}
+                            <div className="flex gap-2 mt-1">
+                              <Badge variant="outline" className="text-[10px]">
+                                {c.type === "blocking" ? "blokkerend" : "advies"}
+                              </Badge>
+                              <Badge variant="outline" className="text-[10px]">
+                                {c.status === "open" ? "open" : c.status === "submitted" ? "ingediend" : "opgelost"}
+                              </Badge>
+                            </div>
+                          </div>
+                          {c.type === "blocking" && c.status === "submitted" && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => handleResolveCondition(c.id)}
+                              disabled={resolveConditionMutation.isPending}
+                              data-testid={`lo-resolve-${c.id}`}
+                            >
+                              Markeer als opgelost
+                            </Button>
+                          )}
+                        </div>
+                        {c.reviewerNotes && (
+                          <p className="text-sm bg-muted/30 p-2 rounded">
+                            <span className="font-medium">Interne notitie:</span> {c.reviewerNotes}
+                          </p>
+                        )}
+                        {(c.responseText || c.responseDocumentFilename) && (
+                          <div className="rounded-md bg-blue-50/60 dark:bg-blue-950/20 p-3 text-sm space-y-1">
+                            <p className="font-medium text-blue-900 dark:text-blue-200">
+                              Reactie van prospect
+                            </p>
+                            {c.responseText && (
+                              <p className="whitespace-pre-wrap text-blue-900/80 dark:text-blue-200/80">
+                                "{c.responseText}"
+                              </p>
+                            )}
+                            {c.responseDocumentFilename && (
+                              <p className="text-blue-900/80 dark:text-blue-200/80">
+                                Document: {c.responseDocumentFilename}
+                              </p>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </>
               )}
             </CardContent>
           </Card>

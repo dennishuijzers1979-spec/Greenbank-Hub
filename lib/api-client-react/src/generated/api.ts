@@ -23,6 +23,8 @@ import type {
   AuthSession,
   ChangePasswordRequest,
   Condition,
+  ConditionResolveInput,
+  ConditionResponseInput,
   CreditMemorandum,
   DecisionRequest,
   Document,
@@ -2315,6 +2317,264 @@ export function useListMyConditions<
 
   return { ...query, queryKey: queryOptions.queryKey };
 }
+
+/**
+ * @summary Prospect submits a response to a requested item
+ */
+export const getRespondToConditionUrl = (conditionId: string) => {
+  return `/api/conditions/${conditionId}/respond`;
+};
+
+export const respondToCondition = async (
+  conditionId: string,
+  conditionResponseInput: ConditionResponseInput,
+  options?: RequestInit,
+): Promise<Condition> => {
+  return customFetch<Condition>(getRespondToConditionUrl(conditionId), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(conditionResponseInput),
+  });
+};
+
+export const getRespondToConditionMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof respondToCondition>>,
+    TError,
+    { conditionId: string; data: BodyType<ConditionResponseInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof respondToCondition>>,
+  TError,
+  { conditionId: string; data: BodyType<ConditionResponseInput> },
+  TContext
+> => {
+  const mutationKey = ["respondToCondition"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof respondToCondition>>,
+    { conditionId: string; data: BodyType<ConditionResponseInput> }
+  > = (props) => {
+    const { conditionId, data } = props ?? {};
+
+    return respondToCondition(conditionId, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type RespondToConditionMutationResult = NonNullable<
+  Awaited<ReturnType<typeof respondToCondition>>
+>;
+export type RespondToConditionMutationBody = BodyType<ConditionResponseInput>;
+export type RespondToConditionMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Prospect submits a response to a requested item
+ */
+export const useRespondToCondition = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof respondToCondition>>,
+    TError,
+    { conditionId: string; data: BodyType<ConditionResponseInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof respondToCondition>>,
+  TError,
+  { conditionId: string; data: BodyType<ConditionResponseInput> },
+  TContext
+> => {
+  return useMutation(getRespondToConditionMutationOptions(options));
+};
+
+/**
+ * @summary Loan officer / admin marks a submitted condition as resolved
+ */
+export const getResolveConditionUrl = (conditionId: string) => {
+  return `/api/conditions/${conditionId}/resolve`;
+};
+
+export const resolveCondition = async (
+  conditionId: string,
+  conditionResolveInput?: ConditionResolveInput,
+  options?: RequestInit,
+): Promise<Condition> => {
+  return customFetch<Condition>(getResolveConditionUrl(conditionId), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(conditionResolveInput),
+  });
+};
+
+export const getResolveConditionMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof resolveCondition>>,
+    TError,
+    { conditionId: string; data: BodyType<ConditionResolveInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof resolveCondition>>,
+  TError,
+  { conditionId: string; data: BodyType<ConditionResolveInput> },
+  TContext
+> => {
+  const mutationKey = ["resolveCondition"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof resolveCondition>>,
+    { conditionId: string; data: BodyType<ConditionResolveInput> }
+  > = (props) => {
+    const { conditionId, data } = props ?? {};
+
+    return resolveCondition(conditionId, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type ResolveConditionMutationResult = NonNullable<
+  Awaited<ReturnType<typeof resolveCondition>>
+>;
+export type ResolveConditionMutationBody = BodyType<ConditionResolveInput>;
+export type ResolveConditionMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Loan officer / admin marks a submitted condition as resolved
+ */
+export const useResolveCondition = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof resolveCondition>>,
+    TError,
+    { conditionId: string; data: BodyType<ConditionResolveInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof resolveCondition>>,
+  TError,
+  { conditionId: string; data: BodyType<ConditionResolveInput> },
+  TContext
+> => {
+  return useMutation(getResolveConditionMutationOptions(options));
+};
+
+/**
+ * @summary Move dossier from additional_info_requested back to loan_officer_review
+ */
+export const getReturnDossierToReviewUrl = (dossierId: string) => {
+  return `/api/dossiers/${dossierId}/return-to-review`;
+};
+
+export const returnDossierToReview = async (
+  dossierId: string,
+  options?: RequestInit,
+): Promise<Dossier> => {
+  return customFetch<Dossier>(getReturnDossierToReviewUrl(dossierId), {
+    ...options,
+    method: "POST",
+  });
+};
+
+export const getReturnDossierToReviewMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof returnDossierToReview>>,
+    TError,
+    { dossierId: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof returnDossierToReview>>,
+  TError,
+  { dossierId: string },
+  TContext
+> => {
+  const mutationKey = ["returnDossierToReview"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof returnDossierToReview>>,
+    { dossierId: string }
+  > = (props) => {
+    const { dossierId } = props ?? {};
+
+    return returnDossierToReview(dossierId, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type ReturnDossierToReviewMutationResult = NonNullable<
+  Awaited<ReturnType<typeof returnDossierToReview>>
+>;
+
+export type ReturnDossierToReviewMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Move dossier from additional_info_requested back to loan_officer_review
+ */
+export const useReturnDossierToReview = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof returnDossierToReview>>,
+    TError,
+    { dossierId: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof returnDossierToReview>>,
+  TError,
+  { dossierId: string },
+  TContext
+> => {
+  return useMutation(getReturnDossierToReviewMutationOptions(options));
+};
 
 /**
  * @summary List partner financiers

@@ -15,5 +15,11 @@ export interface Condition {
   description: string;
   requiredAction?: string | null;
   status: string;
+  responseText?: string | null;
+  responseDocumentId?: string | null;
+  responseDocumentFilename?: string | null;
+  respondedAt?: string | null;
+  resolvedAt?: string | null;
+  reviewerNotes?: string | null;
   createdAt: string;
 }

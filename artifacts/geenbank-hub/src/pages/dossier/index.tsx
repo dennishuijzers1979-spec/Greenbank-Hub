@@ -1,10 +1,13 @@
+import { useState } from "react";
 import {
   useGetMyDossier, getGetMyDossierQueryKey, useSubmitMyDossier,
   useRunMyPrevalidation, useRunMyAnalysis,
   useListMyConditions, getListMyConditionsQueryKey,
   getGetMyEntrepreneurReportQueryKey,
   useListMyDocuments, getListMyDocumentsQueryKey,
+  useRespondToCondition,
 } from "@workspace/api-client-react";
+import type { Condition } from "@workspace/api-client-react";
 import type { GateBlockedError } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
@@ -13,7 +16,11 @@ import { ProgressSteps } from "@/components/ui/progress-steps";
 import { PROSPECT_PIPELINE_STEPS, getCurrentStepIndex, getStatusLabel } from "@/lib/dossier-utils";
 import { Link, useLocation } from "wouter";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { AlertCircle, FileText, Upload, BrainCircuit, CheckCircle2, ArrowRight, Loader2, PlayCircle, Sparkles } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Textarea } from "@/components/ui/textarea";
+import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { AlertCircle, FileText, Upload, BrainCircuit, CheckCircle2, ArrowRight, Loader2, PlayCircle, Sparkles, Send, Hourglass, Paperclip } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
 /**
@@ -204,37 +211,10 @@ export default function DossierHub() {
       </Card>
 
       {dossier.status === "additional_info_requested" && (
-        <Alert
-          data-testid="alert-additional-info-requested"
-          className="border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200"
-        >
-          <AlertCircle className="w-4 h-4" />
-          <AlertTitle>De kredietacceptant vraagt aanvullende informatie</AlertTitle>
-          <AlertDescription className="space-y-2">
-            <p>
-              Lever de onderstaande items aan om je dossier weer in beoordeling
-              te krijgen. Zodra alle items zijn afgehandeld, gaat je dossier
-              automatisch terug naar de kredietacceptant.
-            </p>
-            {conditions && conditions.filter(c => c.type === "blocking" && c.status === "open").length > 0 ? (
-              <ul
-                data-testid="prospect-requested-items"
-                className="list-disc pl-5 text-sm space-y-1"
-              >
-                {conditions
-                  .filter(c => c.type === "blocking" && c.status === "open")
-                  .map(c => (
-                    <li key={c.id}>{c.requiredAction || c.title}</li>
-                  ))}
-              </ul>
-            ) : (
-              <p className="text-sm italic">
-                Geen specifieke items opgegeven — neem contact op met je
-                kredietacceptant voor de details.
-              </p>
-            )}
-          </AlertDescription>
-        </Alert>
+        <AdditionalInfoSection
+          conditions={conditions ?? []}
+          documents={docs ?? []}
+        />
       )}
 
       {dossier.status === "rejected_by_loan_officer" && (
@@ -401,6 +381,7 @@ export default function DossierHub() {
       )}
 
       {/* Submission Card */}
+      {/* (AdditionalInfoSection is rendered above when status === additional_info_requested) */}
       {stepIndex >= 3 && dossier.status !== "closed" && (
         <Card className={`border-2 ${canSubmit ? 'border-primary' : 'border-muted'} shadow-md overflow-hidden`}>
           <div className="absolute top-0 left-0 w-1 h-full bg-primary"></div>
@@ -431,5 +412,327 @@ export default function DossierHub() {
         </Card>
       )}
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Additional-information recovery loop
+// ---------------------------------------------------------------------------
+
+type DocumentRef = { id: string; filename: string; documentType: string };
+
+interface AdditionalInfoSectionProps {
+  conditions: Condition[];
+  documents: DocumentRef[];
+}
+
+function AdditionalInfoSection({ conditions, documents }: AdditionalInfoSectionProps) {
+  // Filter to blocking items only — non-blocking conditions are advisory
+  // and never gate the dossier. Sort: open first, then submitted, then
+  // resolved, so the prospect's eyes land on actionable items.
+  const blocking = conditions.filter((c) => c.type === "blocking");
+  const order = (s: string) => (s === "open" ? 0 : s === "submitted" ? 1 : 2);
+  const sorted = [...blocking].sort((a, b) => order(a.status) - order(b.status));
+
+  const total = sorted.length;
+  const resolvedCount = sorted.filter((c) => c.status === "resolved").length;
+  const submittedCount = sorted.filter((c) => c.status === "submitted").length;
+  const openCount = sorted.filter((c) => c.status === "open").length;
+
+  return (
+    <Card
+      data-testid="alert-additional-info-requested"
+      className="border-amber-300 bg-amber-50/40 dark:border-amber-800 dark:bg-amber-950/20"
+    >
+      <CardHeader>
+        <div className="flex items-start gap-3">
+          <AlertCircle className="w-5 h-5 text-amber-700 mt-0.5" />
+          <div className="flex-1">
+            <CardTitle className="text-amber-900 dark:text-amber-200">
+              De kredietacceptant vraagt aanvullende informatie
+            </CardTitle>
+            <CardDescription className="text-amber-900/80 dark:text-amber-200/80">
+              Hoe vollediger en eerlijker je antwoord, hoe beter de
+              kredietacceptant je dossier kan beoordelen — en hoe groter de
+              kans op een passende financiering. Behandel hieronder elk punt
+              afzonderlijk.
+            </CardDescription>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {total === 0 ? (
+          <p className="text-sm italic text-muted-foreground" data-testid="prospect-requested-items-empty">
+            Er zijn op dit moment geen specifieke punten opgegeven. Neem
+            contact op met je kredietacceptant voor de details.
+          </p>
+        ) : (
+          <>
+            <div className="flex flex-wrap gap-2 text-xs" data-testid="conditions-summary">
+              <Badge variant="outline" className="border-amber-400 text-amber-900">
+                {openCount} open
+              </Badge>
+              <Badge variant="outline" className="border-blue-400 text-blue-900">
+                {submittedCount} ingediend
+              </Badge>
+              <Badge variant="outline" className="border-green-400 text-green-900">
+                {resolvedCount} afgehandeld
+              </Badge>
+            </div>
+            <div className="space-y-3" data-testid="prospect-requested-items">
+              {sorted.map((c) => (
+                <ConditionResponseCard
+                  key={c.id}
+                  condition={c}
+                  documents={documents}
+                />
+              ))}
+            </div>
+            {openCount === 0 && submittedCount > 0 && (
+              <Alert className="border-blue-300 bg-blue-50 text-blue-900">
+                <Hourglass className="w-4 h-4" />
+                <AlertTitle>Reacties in beoordeling</AlertTitle>
+                <AlertDescription>
+                  Je hebt op alle punten gereageerd. De kredietacceptant
+                  beoordeelt je antwoorden — je hoeft nu niets te doen.
+                </AlertDescription>
+              </Alert>
+            )}
+            {openCount === 0 && submittedCount === 0 && resolvedCount === total && total > 0 && (
+              <Alert className="border-green-300 bg-green-50 text-green-900" data-testid="all-resolved-banner">
+                <CheckCircle2 className="w-4 h-4" />
+                <AlertTitle>Alle punten zijn afgehandeld</AlertTitle>
+                <AlertDescription>
+                  Je dossier wordt teruggezet voor verdere beoordeling.
+                </AlertDescription>
+              </Alert>
+            )}
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+interface ConditionResponseCardProps {
+  condition: Condition;
+  documents: DocumentRef[];
+}
+
+function ConditionResponseCard({ condition, documents }: ConditionResponseCardProps) {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const [text, setText] = useState("");
+  const [documentId, setDocumentId] = useState<string>("");
+  const [validationError, setValidationError] = useState<string | null>(null);
+  const respondMutation = useRespondToCondition();
+  const isSubmitting = respondMutation.isPending;
+
+  const handleSubmit = () => {
+    const trimmed = text.trim();
+    const docId = documentId || null;
+    if (!trimmed && !docId) {
+      setValidationError(
+        "Geef een toelichting of kies een geüpload document om dit punt af te handelen.",
+      );
+      return;
+    }
+    setValidationError(null);
+    respondMutation.mutate(
+      {
+        conditionId: condition.id,
+        data: {
+          responseText: trimmed || null,
+          responseDocumentId: docId,
+        },
+      },
+      {
+        onSuccess: () => {
+          queryClient.invalidateQueries({ queryKey: getListMyConditionsQueryKey() });
+          queryClient.invalidateQueries({ queryKey: getGetMyDossierQueryKey() });
+          toast({
+            title: "Aanvullende informatie verzonden",
+            description: "De kredietacceptant beoordeelt je reactie.",
+          });
+          setText("");
+          setDocumentId("");
+        },
+        onError: (err: unknown) => {
+          const data =
+            err && typeof err === "object" && "data" in err && (err as { data: unknown }).data && typeof (err as { data: unknown }).data === "object"
+              ? ((err as { data: { error?: string; message?: string } }).data ?? {})
+              : {};
+          toast({
+            title: data.error ?? "Verzenden mislukt",
+            description: data.message ?? "Probeer het later opnieuw.",
+            variant: "destructive",
+          });
+        },
+      },
+    );
+  };
+
+  const status = condition.status;
+  const label = condition.requiredAction || condition.title;
+
+  return (
+    <div
+      data-testid={`condition-card-${condition.id}`}
+      data-status={status}
+      className="rounded-lg border bg-card p-4 space-y-3"
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="space-y-1">
+          <h4 className="font-medium leading-snug">{label}</h4>
+          {condition.description && condition.description !== label && (
+            <p className="text-sm text-muted-foreground">{condition.description}</p>
+          )}
+        </div>
+        <ConditionStatusBadge status={status} />
+      </div>
+
+      {status === "open" && (
+        <div className="space-y-3">
+          <div className="space-y-1">
+            <Label htmlFor={`response-text-${condition.id}`} className="text-sm">
+              Toelichting (optioneel als je een document koppelt)
+            </Label>
+            <Textarea
+              id={`response-text-${condition.id}`}
+              data-testid={`response-text-${condition.id}`}
+              placeholder="Beschrijf hier je antwoord of context..."
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              rows={3}
+              disabled={isSubmitting}
+            />
+          </div>
+          <div className="space-y-1">
+            <Label className="text-sm">Koppel een geüpload document (optioneel)</Label>
+            <div className="flex flex-col sm:flex-row gap-2">
+              <Select
+                value={documentId}
+                onValueChange={(v) => setDocumentId(v === "__none" ? "" : v)}
+                disabled={isSubmitting || documents.length === 0}
+              >
+                <SelectTrigger
+                  className="flex-1"
+                  data-testid={`response-document-${condition.id}`}
+                >
+                  <SelectValue
+                    placeholder={
+                      documents.length === 0
+                        ? "Nog geen documenten geüpload"
+                        : "Kies een document..."
+                    }
+                  />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none">— geen —</SelectItem>
+                  {documents.map((d) => (
+                    <SelectItem key={d.id} value={d.id}>
+                      {d.filename}{" "}
+                      <span className="text-muted-foreground">({d.documentType})</span>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Button asChild variant="outline" size="sm">
+                <Link href="/dossier/documenten">
+                  <Upload className="w-3.5 h-3.5 mr-1" />
+                  Upload nieuw document
+                </Link>
+              </Button>
+            </div>
+          </div>
+          {validationError && (
+            <p
+              className="text-sm text-destructive"
+              data-testid={`response-error-${condition.id}`}
+            >
+              {validationError}
+            </p>
+          )}
+          <div className="flex justify-end">
+            <Button
+              size="sm"
+              onClick={handleSubmit}
+              disabled={isSubmitting}
+              data-testid={`response-submit-${condition.id}`}
+            >
+              {isSubmitting ? (
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+              ) : (
+                <Send className="w-4 h-4 mr-2" />
+              )}
+              Verstuur reactie
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {status === "submitted" && (
+        <div className="space-y-2 rounded-md bg-blue-50 dark:bg-blue-950/30 p-3 text-sm">
+          <p className="font-medium text-blue-900 dark:text-blue-200">
+            Wachtend op beoordeling
+          </p>
+          {condition.responseText && (
+            <p className="text-blue-900/80 dark:text-blue-200/80 whitespace-pre-wrap">
+              "{condition.responseText}"
+            </p>
+          )}
+          {condition.responseDocumentFilename && (
+            <p className="text-blue-900/80 dark:text-blue-200/80 flex items-center gap-1">
+              <Paperclip className="w-3.5 h-3.5" />
+              {condition.responseDocumentFilename}
+            </p>
+          )}
+        </div>
+      )}
+
+      {status === "resolved" && (
+        <div className="rounded-md bg-green-50 dark:bg-green-950/30 p-3 text-sm flex items-start gap-2">
+          <CheckCircle2 className="w-4 h-4 text-green-700 mt-0.5" />
+          <div>
+            <p className="font-medium text-green-900 dark:text-green-200">
+              Geaccepteerd door de kredietacceptant
+            </p>
+            {condition.responseText && (
+              <p className="text-green-900/80 dark:text-green-200/80 whitespace-pre-wrap">
+                "{condition.responseText}"
+              </p>
+            )}
+            {condition.responseDocumentFilename && (
+              <p className="text-green-900/80 dark:text-green-200/80 flex items-center gap-1">
+                <Paperclip className="w-3.5 h-3.5" />
+                {condition.responseDocumentFilename}
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ConditionStatusBadge({ status }: { status: string }) {
+  if (status === "resolved") {
+    return (
+      <Badge className="bg-green-600 hover:bg-green-700 text-white text-[10px]">
+        afgehandeld
+      </Badge>
+    );
+  }
+  if (status === "submitted") {
+    return (
+      <Badge variant="outline" className="border-blue-400 text-blue-900 text-[10px]">
+        ingediend
+      </Badge>
+    );
+  }
+  return (
+    <Badge variant="outline" className="border-amber-400 text-amber-900 text-[10px]">
+      open
+    </Badge>
   );
 }

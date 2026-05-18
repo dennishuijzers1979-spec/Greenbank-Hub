@@ -890,6 +890,12 @@ export const ListConditionsResponseItem = zod.object({
   description: zod.string(),
   requiredAction: zod.string().nullish(),
   status: zod.string(),
+  responseText: zod.string().nullish(),
+  responseDocumentId: zod.string().nullish(),
+  responseDocumentFilename: zod.string().nullish(),
+  respondedAt: zod.string().nullish(),
+  resolvedAt: zod.string().nullish(),
+  reviewerNotes: zod.string().nullish(),
   createdAt: zod.string(),
 });
 export const ListConditionsResponse = zod.array(ListConditionsResponseItem);
@@ -905,9 +911,145 @@ export const ListMyConditionsResponseItem = zod.object({
   description: zod.string(),
   requiredAction: zod.string().nullish(),
   status: zod.string(),
+  responseText: zod.string().nullish(),
+  responseDocumentId: zod.string().nullish(),
+  responseDocumentFilename: zod.string().nullish(),
+  respondedAt: zod.string().nullish(),
+  resolvedAt: zod.string().nullish(),
+  reviewerNotes: zod.string().nullish(),
   createdAt: zod.string(),
 });
 export const ListMyConditionsResponse = zod.array(ListMyConditionsResponseItem);
+
+/**
+ * @summary Prospect submits a response to a requested item
+ */
+export const RespondToConditionParams = zod.object({
+  conditionId: zod.coerce.string(),
+});
+
+export const RespondToConditionBody = zod
+  .object({
+    responseText: zod.string().nullish(),
+    responseDocumentId: zod.string().nullish(),
+  })
+  .describe(
+    "At least one of `responseText` or `responseDocumentId` must be\nprovided. The document (if provided) must already belong to the\nprospect's own dossier.\n",
+  );
+
+export const RespondToConditionResponse = zod.object({
+  id: zod.string(),
+  dossierId: zod.string(),
+  type: zod.enum(["blocking", "non_blocking"]),
+  title: zod.string(),
+  description: zod.string(),
+  requiredAction: zod.string().nullish(),
+  status: zod.string(),
+  responseText: zod.string().nullish(),
+  responseDocumentId: zod.string().nullish(),
+  responseDocumentFilename: zod.string().nullish(),
+  respondedAt: zod.string().nullish(),
+  resolvedAt: zod.string().nullish(),
+  reviewerNotes: zod.string().nullish(),
+  createdAt: zod.string(),
+});
+
+/**
+ * @summary Loan officer / admin marks a submitted condition as resolved
+ */
+export const ResolveConditionParams = zod.object({
+  conditionId: zod.coerce.string(),
+});
+
+export const ResolveConditionBody = zod.object({
+  reviewerNotes: zod.string().nullish(),
+});
+
+export const ResolveConditionResponse = zod.object({
+  id: zod.string(),
+  dossierId: zod.string(),
+  type: zod.enum(["blocking", "non_blocking"]),
+  title: zod.string(),
+  description: zod.string(),
+  requiredAction: zod.string().nullish(),
+  status: zod.string(),
+  responseText: zod.string().nullish(),
+  responseDocumentId: zod.string().nullish(),
+  responseDocumentFilename: zod.string().nullish(),
+  respondedAt: zod.string().nullish(),
+  resolvedAt: zod.string().nullish(),
+  reviewerNotes: zod.string().nullish(),
+  createdAt: zod.string(),
+});
+
+/**
+ * @summary Move dossier from additional_info_requested back to loan_officer_review
+ */
+export const ReturnDossierToReviewParams = zod.object({
+  dossierId: zod.coerce.string(),
+});
+
+export const ReturnDossierToReviewResponse = zod.object({
+  id: zod.string(),
+  prospectId: zod.string(),
+  prospect: zod
+    .object({
+      id: zod.string(),
+      userId: zod.string(),
+      companyName: zod.string(),
+      contactName: zod.string(),
+      kvkNumber: zod.string().nullish(),
+      phone: zod.string().nullish(),
+      source: zod.string().nullish(),
+      pipedriveDealId: zod.string().nullish(),
+      createdAt: zod.string(),
+    })
+    .optional(),
+  status: zod.enum([
+    "lead_created",
+    "account_invited",
+    "prospect_logged_in",
+    "intake_in_progress",
+    "documents_uploaded",
+    "pre_validation_running",
+    "blocked_missing_documents",
+    "blocked_invalid_documents",
+    "ready_for_ai_analysis",
+    "ai_analysis_running",
+    "entrepreneur_report_ready",
+    "submitted_to_geenbank",
+    "loan_officer_review",
+    "additional_info_requested",
+    "approved_for_partner_submission",
+    "rejected_by_loan_officer",
+    "memorandum_generated",
+    "submitted_to_partners",
+    "partner_response_received",
+    "closed",
+  ]),
+  currentStage: zod.string(),
+  financingPurpose: zod.string().nullish(),
+  requestedAmount: zod.number().nullish(),
+  financingTypePreference: zod.string().nullish(),
+  existingFinancing: zod.string().nullish(),
+  annualRevenue: zod.number().nullish(),
+  annualCost: zod.number().nullish(),
+  annualProfit: zod.number().nullish(),
+  companyDescription: zod.string().nullish(),
+  completenessScore: zod.number().nullish(),
+  correctnessScore: zod.number().nullish(),
+  viabilityScore: zod.number().nullish(),
+  confidenceScore: zod.number().nullish(),
+  aiVerdict: zod.string().nullish(),
+  loanOfficerDecision: zod.string().nullish(),
+  loanOfficerNotes: zod.string().nullish(),
+  submittedAt: zod.string().nullish(),
+  createdAt: zod.string(),
+  updatedAt: zod.string(),
+  intakeCompletionPercent: zod.number(),
+  documentsCount: zod.number(),
+  blockingConditionsCount: zod.number(),
+});
 
 /**
  * @summary List partner financiers

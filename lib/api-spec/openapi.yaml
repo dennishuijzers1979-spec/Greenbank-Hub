@@ -468,6 +468,67 @@ paths:
                 type: array
                 items: { $ref: "#/components/schemas/Condition" }
 
+  /conditions/{conditionId}/respond:
+    post:
+      operationId: respondToCondition
+      tags: [conditions]
+      summary: Prospect submits a response to a requested item
+      parameters:
+        - in: path
+          name: conditionId
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ConditionResponseInput" }
+      responses:
+        "200":
+          description: Updated condition
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Condition" }
+
+  /conditions/{conditionId}/resolve:
+    post:
+      operationId: resolveCondition
+      tags: [conditions]
+      summary: Loan officer / admin marks a submitted condition as resolved
+      parameters:
+        - in: path
+          name: conditionId
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ConditionResolveInput" }
+      responses:
+        "200":
+          description: Updated condition
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Condition" }
+
+  /dossiers/{dossierId}/return-to-review:
+    post:
+      operationId: returnDossierToReview
+      tags: [dossiers]
+      summary: Move dossier from additional_info_requested back to loan_officer_review
+      parameters:
+        - in: path
+          name: dossierId
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Updated dossier
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Dossier" }
+
   /partners:
     get:
       operationId: listPartners
@@ -1135,8 +1196,31 @@ components:
         description: { type: string }
         requiredAction: { type: string, nullable: true }
         status: { type: string }
+        responseText: { type: string, nullable: true }
+        responseDocumentId: { type: string, nullable: true }
+        responseDocumentFilename: { type: string, nullable: true }
+        respondedAt: { type: string, nullable: true }
+        resolvedAt: { type: string, nullable: true }
+        # Internal-only field. Populated for loan officers/admins; ALWAYS
+        # null on prospect-facing endpoints. Never expose to prospects.
+        reviewerNotes: { type: string, nullable: true }
         createdAt: { type: string }
       required: [id, dossierId, type, title, description, status, createdAt]
+
+    ConditionResponseInput:
+      type: object
+      description: |
+        At least one of `responseText` or `responseDocumentId` must be
+        provided. The document (if provided) must already belong to the
+        prospect's own dossier.
+      properties:
+        responseText: { type: string, nullable: true }
+        responseDocumentId: { type: string, nullable: true }
+
+    ConditionResolveInput:
+      type: object
+      properties:
+        reviewerNotes: { type: string, nullable: true }
 
     DecisionRequest:
       type: object

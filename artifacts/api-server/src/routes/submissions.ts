@@ -6,7 +6,9 @@ import {
   partnerFinanciersTable,
   dossiersTable,
   prospectProfilesTable,
+  conditionsTable,
 } from "@workspace/db";
+import { and, ne } from "drizzle-orm";
 import {
   ListDossierSubmissionsParams,
   SubmitDossierToPartnersParams,
@@ -143,6 +145,29 @@ router.post("/dossiers/:dossierId/submissions", requireAuth(["loan_officer", "ad
       .limit(1);
     if (!row) {
       return { ok: false, httpStatus: 404, payload: { error: "Dossier niet gevonden" } };
+    }
+    // Defensive gate: never let a dossier with outstanding blocking
+    // conditions reach partners — even if it somehow ended up in an
+    // approved status. This mirrors checkRunAnalysisGate's rule.
+    const outstandingBlocking = await tx
+      .select()
+      .from(conditionsTable)
+      .where(
+        and(
+          eq(conditionsTable.dossierId, params.data.dossierId),
+          eq(conditionsTable.type, "blocking"),
+          ne(conditionsTable.status, "resolved"),
+        ),
+      );
+    if (outstandingBlocking.length > 0) {
+      return {
+        ok: false,
+        httpStatus: 409,
+        payload: {
+          error: "Open blokkerende voorwaarden",
+          message: `Er staan nog ${outstandingBlocking.length} blokkerende voorwaarde(n) open — los deze eerst op voordat je het dossier aanbiedt.`,
+        },
+      };
     }
     if (!SUBMITTABLE_STATUSES.has(row.dossier.status)) {
       return {

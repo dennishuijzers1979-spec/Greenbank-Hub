@@ -251,7 +251,19 @@ export function serializeRunForProspect(r: DbRun) {
   return { ...base, skillInvocations: sanitized };
 }
 
-export function serializeCondition(c: DbCondition) {
+/**
+ * Serialize a condition for a prospect (or any non-officer caller).
+ *
+ * Internal-only fields (reviewerNotes) are ALWAYS null in this variant.
+ * Use serializeConditionForOfficer when returning to a loan officer/admin.
+ *
+ * `responseDocumentFilename` may be passed in by the caller when the
+ * linked document has been resolved.
+ */
+export function serializeCondition(
+  c: DbCondition,
+  opts: { responseDocumentFilename?: string | null } = {},
+) {
   return {
     id: c.id,
     dossierId: c.dossierId,
@@ -260,7 +272,23 @@ export function serializeCondition(c: DbCondition) {
     description: c.description,
     requiredAction: c.requiredAction,
     status: c.status,
+    responseText: c.responseText ?? null,
+    responseDocumentId: c.responseDocumentId ?? null,
+    responseDocumentFilename: opts.responseDocumentFilename ?? null,
+    respondedAt: iso(c.respondedAt),
+    resolvedAt: iso(c.resolvedAt),
+    reviewerNotes: null as string | null,
     createdAt: isoReq(c.createdAt),
+  };
+}
+
+export function serializeConditionForOfficer(
+  c: DbCondition,
+  opts: { responseDocumentFilename?: string | null } = {},
+) {
+  return {
+    ...serializeCondition(c, opts),
+    reviewerNotes: c.reviewerNotes ?? null,
   };
 }
 

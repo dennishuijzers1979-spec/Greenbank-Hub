@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { and, eq, desc, count } from "drizzle-orm";
+import { and, eq, desc, count, ne } from "drizzle-orm";
 import {
   db,
   dossiersTable,
@@ -356,5 +356,92 @@ router.post("/dossiers/:dossierId/decision", requireAuth(["loan_officer", "admin
   const c = await counts(dossier.id);
   res.json(serializeDossier(updated, prospect, c.documentsCount, c.blockingConditionsCount));
 });
+
+/**
+ * Move a dossier from `additional_info_requested` back to
+ * `loan_officer_review` so the officer can finalise the decision after
+ * the prospect has supplied (and the officer has accepted) the missing
+ * information.
+ *
+ * Pre-conditions:
+ *   - dossier currently in `additional_info_requested`
+ *   - every blocking condition on the dossier is `resolved`
+ *
+ * The endpoint is intentionally minimal — pricing/AI/RBAC are unchanged.
+ */
+router.post(
+  "/dossiers/:dossierId/return-to-review",
+  requireAuth(["loan_officer", "admin"]),
+  async (req, res): Promise<void> => {
+    const dossierId = req.params.dossierId as string;
+    if (!(await officerCanAccessDossier(dossierId))) {
+      res.status(404).json({ error: "Dossier niet gevonden" });
+      return;
+    }
+    const [row] = await db
+      .select()
+      .from(dossiersTable)
+      .innerJoin(
+        prospectProfilesTable,
+        eq(prospectProfilesTable.id, dossiersTable.prospectId),
+      )
+      .where(eq(dossiersTable.id, dossierId))
+      .limit(1);
+    if (!row) {
+      res.status(404).json({ error: "Dossier niet gevonden" });
+      return;
+    }
+    if (row.dossiers.status !== "additional_info_requested") {
+      res.status(409).json({
+        error: "Status verkeerd",
+        message: `Het dossier staat in status \"${row.dossiers.status}\" — terugzetten kan alleen vanuit 'additional_info_requested'.`,
+      });
+      return;
+    }
+    const blockingNotResolved = await db
+      .select()
+      .from(conditionsTable)
+      .where(
+        and(
+          eq(conditionsTable.dossierId, dossierId),
+          eq(conditionsTable.type, "blocking"),
+          ne(conditionsTable.status, "resolved"),
+        ),
+      );
+    if (blockingNotResolved.length > 0) {
+      res.status(409).json({
+        error: "Open blokkerende voorwaarden",
+        message: `Er staan nog ${blockingNotResolved.length} blokkerende voorwaarde(n) open of in afwachting van beoordeling.`,
+      });
+      return;
+    }
+
+    const [updated] = await db
+      .update(dossiersTable)
+      .set({ status: "loan_officer_review", updatedAt: new Date() })
+      .where(eq(dossiersTable.id, dossierId))
+      .returning();
+    await logActivity({
+      dossierId,
+      actor: req.user!,
+      action: "returned_to_review",
+      description:
+        "Kredietacceptant heeft het dossier teruggezet naar beoordeling — alle aanvullende informatie is afgehandeld.",
+      metadata: {
+        previousStatus: "additional_info_requested",
+        nextStatus: "loan_officer_review",
+      },
+    });
+    const c = await counts(updated.id);
+    res.json(
+      serializeDossier(
+        updated,
+        row.prospect_profiles,
+        c.documentsCount,
+        c.blockingConditionsCount,
+      ),
+    );
+  },
+);
 
 export default router;

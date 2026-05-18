@@ -1,5 +1,7 @@
 import { pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
 import { dossiersTable } from "./dossiers";
+import { documentsTable } from "./documents";
+import { usersTable } from "./users";
 
 export const conditionsTable = pgTable("conditions", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -11,6 +13,26 @@ export const conditionsTable = pgTable("conditions", {
   description: text("description").notNull(),
   requiredAction: text("required_action"),
   status: text("status").notNull().default("open"),
+  // Prospect response fields. When the prospect submits a response to a
+  // requested item we record either free-text or a linked document (or
+  // both). The condition status moves from "open" to "submitted".
+  responseText: text("response_text"),
+  responseDocumentId: uuid("response_document_id").references(
+    () => documentsTable.id,
+    { onDelete: "set null" },
+  ),
+  respondedAt: timestamp("responded_at", { withTimezone: true }),
+  respondedBy: uuid("responded_by").references(() => usersTable.id, {
+    onDelete: "set null",
+  }),
+  // Loan-officer review fields. When the officer accepts a submitted
+  // response the condition moves to "resolved". `reviewerNotes` is
+  // internal-only and must NOT be exposed to the prospect.
+  resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+  resolvedBy: uuid("resolved_by").references(() => usersTable.id, {
+    onDelete: "set null",
+  }),
+  reviewerNotes: text("reviewer_notes"),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),

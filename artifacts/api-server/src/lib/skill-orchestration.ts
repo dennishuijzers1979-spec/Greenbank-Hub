@@ -1,4 +1,4 @@
-import { eq, desc, and, inArray } from "drizzle-orm";
+import { eq, desc, and, inArray, ne } from "drizzle-orm";
 import {
   db,
   dossiersTable,
@@ -86,6 +86,10 @@ export async function checkRunAnalysisGate(
     .filter((d) => d.validationStatus === "invalid")
     .map((d) => d.filename);
 
+  // A blocking condition counts as "outstanding" until the loan officer
+  // actually marks it resolved. Both 'open' (no response yet) and
+  // 'submitted' (waiting on officer review) must continue to block the
+  // analysis / partner-submission gate.
   const blockingConditions = await db
     .select()
     .from(conditionsTable)
@@ -93,7 +97,7 @@ export async function checkRunAnalysisGate(
       and(
         eq(conditionsTable.dossierId, dossierId),
         eq(conditionsTable.type, "blocking"),
-        eq(conditionsTable.status, "open"),
+        ne(conditionsTable.status, "resolved"),
       ),
     );
 
