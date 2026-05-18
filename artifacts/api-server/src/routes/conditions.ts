@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { eq, desc, and, ne, or, isNotNull, inArray } from "drizzle-orm";
+import { eq, desc, and, ne, or, isNotNull, inArray, count } from "drizzle-orm";
 import {
   db,
   conditionsTable,
@@ -21,6 +21,7 @@ import { logActivity } from "../lib/activity";
 import {
   serializeCondition,
   serializeConditionForOfficer,
+  serializeDossier,
 } from "../lib/serializers";
 import { officerCanAccessDossier } from "../lib/dossier-access";
 
@@ -431,13 +432,15 @@ router.post(
       return;
     }
 
-    const now = new Date();
-    const writtenIds: string[] = [];
+    // Pre-validate ALL items before any write so we fail fast with a
+    // clean 4xx instead of relying on the transaction to roll back
+    // mid-flight (cheaper, and gives the LO a single clear error).
     for (const item of body.data.items) {
-      const pTitle = item.prospectTitle.trim();
-      const pExplanation = item.prospectExplanation.trim();
-      const pAction = item.prospectRequiredAction.trim();
-      if (!pTitle || !pExplanation || !pAction) {
+      if (
+        !item.prospectTitle.trim() ||
+        !item.prospectExplanation.trim() ||
+        !item.prospectRequiredAction.trim()
+      ) {
         res.status(400).json({
           error: "Lege velden",
           message:
@@ -445,126 +448,170 @@ router.post(
         });
         return;
       }
-
-      if (item.internalConditionId) {
-        // Update existing condition. Verify ownership of the row
-        // matches the same dossier to prevent cross-dossier writes.
-        const [existing] = await db
-          .select()
-          .from(conditionsTable)
-          .where(eq(conditionsTable.id, item.internalConditionId))
-          .limit(1);
-        if (!existing || existing.dossierId !== dossier.id) {
-          res.status(404).json({
-            error: "Voorwaarde niet gevonden",
-            message:
-              "Een interne voorwaarde uit je verzoek bestaat niet of hoort niet bij dit dossier.",
-          });
-          return;
-        }
-        // Idempotency: do not re-request items that are already
-        // submitted or resolved.
-        if (existing.status !== "open") {
-          res.status(409).json({
-            error: "Status verkeerd",
-            message:
-              "Een van de geselecteerde voorwaarden is al in behandeling of opgelost.",
-          });
-          return;
-        }
-        const [updated] = await db
-          .update(conditionsTable)
-          .set({
-            prospectTitle: pTitle,
-            prospectExplanation: pExplanation,
-            prospectRequiredAction: pAction,
-            documentTypeHint: item.documentTypeHint ?? existing.documentTypeHint,
-            reviewerNotes: item.reviewerNotes ?? existing.reviewerNotes,
-            requestedAt: existing.requestedAt ?? now,
-            requestedBy: existing.requestedBy ?? req.user!.id,
-          })
-          .where(eq(conditionsTable.id, item.internalConditionId))
-          .returning();
-        writtenIds.push(updated.id);
-      } else {
-        const [created] = await db
-          .insert(conditionsTable)
-          .values({
-            dossierId: dossier.id,
-            type: item.type ?? "blocking",
-            // Mirror the prospect-facing copy into the internal columns
-            // when the LO drafted a brand-new request from scratch —
-            // there is no separate internal credit wording in that
-            // case.
-            title: pTitle,
-            description: pExplanation,
-            requiredAction: pAction,
-            status: "open",
-            prospectTitle: pTitle,
-            prospectExplanation: pExplanation,
-            prospectRequiredAction: pAction,
-            documentTypeHint: item.documentTypeHint ?? null,
-            reviewerNotes: item.reviewerNotes ?? null,
-            requestedAt: now,
-            requestedBy: req.user!.id,
-          })
-          .returning();
-        writtenIds.push(created.id);
-      }
     }
 
-    // Push the dossier into additional_info_requested if it isn't
-    // already there. We do NOT downgrade dossiers that are further
-    // along (e.g. approved) — that case is rejected by the existing
-    // status enum the LO UI would never hit anyway.
-    const [updatedDossier] = await db
-      .update(dossiersTable)
-      .set({
-        status: "additional_info_requested",
-        updatedAt: new Date(),
-      })
-      .where(eq(dossiersTable.id, dossier.id))
-      .returning();
+    // All writes (conditions + dossier status + activity log) happen
+    // inside a single transaction so the dossier never ends up in a
+    // half-applied state if one item fails (e.g. a stale
+    // internalConditionId or a row that flipped status between the
+    // pre-check and the write).
+    type TxError = { status: number; body: { error: string; message: string } };
+    const now = new Date();
+    const userId = req.user!.id;
+    const previousStatus = dossier.status;
 
-    const written = await db
-      .select()
-      .from(conditionsTable)
-      .where(inArray(conditionsTable.id, writtenIds));
+    let writtenIds: string[] = [];
+    try {
+      writtenIds = await db.transaction(async (tx) => {
+        const ids: string[] = [];
+        for (const item of body.data.items) {
+          const pTitle = item.prospectTitle.trim();
+          const pExplanation = item.prospectExplanation.trim();
+          const pAction = item.prospectRequiredAction.trim();
 
+          if (item.internalConditionId) {
+            const [existing] = await tx
+              .select()
+              .from(conditionsTable)
+              .where(eq(conditionsTable.id, item.internalConditionId))
+              .limit(1);
+            if (!existing || existing.dossierId !== dossier.id) {
+              const err: TxError = {
+                status: 404,
+                body: {
+                  error: "Voorwaarde niet gevonden",
+                  message:
+                    "Een interne voorwaarde uit je verzoek bestaat niet of hoort niet bij dit dossier.",
+                },
+              };
+              throw err;
+            }
+            if (existing.status !== "open") {
+              const err: TxError = {
+                status: 409,
+                body: {
+                  error: "Status verkeerd",
+                  message:
+                    "Een van de geselecteerde voorwaarden is al in behandeling of opgelost.",
+                },
+              };
+              throw err;
+            }
+            const [updated] = await tx
+              .update(conditionsTable)
+              .set({
+                prospectTitle: pTitle,
+                prospectExplanation: pExplanation,
+                prospectRequiredAction: pAction,
+                documentTypeHint: item.documentTypeHint ?? existing.documentTypeHint,
+                reviewerNotes: item.reviewerNotes ?? existing.reviewerNotes,
+                requestedAt: existing.requestedAt ?? now,
+                requestedBy: existing.requestedBy ?? userId,
+              })
+              .where(eq(conditionsTable.id, item.internalConditionId))
+              .returning();
+            ids.push(updated.id);
+          } else {
+            const [created] = await tx
+              .insert(conditionsTable)
+              .values({
+                dossierId: dossier.id,
+                type: item.type ?? "blocking",
+                // Mirror prospect-facing copy into the internal columns
+                // for brand-new requests (there is no separate internal
+                // credit wording in that case).
+                title: pTitle,
+                description: pExplanation,
+                requiredAction: pAction,
+                status: "open",
+                prospectTitle: pTitle,
+                prospectExplanation: pExplanation,
+                prospectRequiredAction: pAction,
+                documentTypeHint: item.documentTypeHint ?? null,
+                reviewerNotes: item.reviewerNotes ?? null,
+                requestedAt: now,
+                requestedBy: userId,
+              })
+              .returning();
+            ids.push(created.id);
+          }
+        }
+        // Push the dossier into additional_info_requested. We
+        // deliberately do NOT downgrade dossiers that are further
+        // along (approved/submitted to partners) — those statuses are
+        // outside the LO UI's call sites for this flow.
+        await tx
+          .update(dossiersTable)
+          .set({
+            status: "additional_info_requested",
+            updatedAt: new Date(),
+          })
+          .where(eq(dossiersTable.id, dossier.id));
+        return ids;
+      });
+    } catch (err) {
+      if (err && typeof err === "object" && "status" in err && "body" in err) {
+        const tx = err as TxError;
+        res.status(tx.status).json(tx.body);
+        return;
+      }
+      throw err;
+    }
+
+    // Activity log is best-effort and intentionally OUTSIDE the
+    // transaction: an audit-log failure must not roll back a
+    // successful state transition.
     await logActivity({
       dossierId: dossier.id,
       actor: req.user!,
       action: "additional_info_requested",
-      description: `Kredietacceptant heeft ${written.length} aanvullend(e) verzoek(en) klaargezet voor de ondernemer.`,
+      description: `Kredietacceptant heeft ${writtenIds.length} aanvullend(e) verzoek(en) klaargezet voor de ondernemer.`,
       metadata: {
-        previousStatus: dossier.status,
+        previousStatus,
         nextStatus: "additional_info_requested",
         conditionIds: writtenIds,
       },
     });
 
-    // We don't bother resolving response-document filenames here — the
-    // brand-new requested items have no response yet by definition.
+    // Reload fresh post-commit state for the response payload, and
+    // compute the dossier counts so we can return a full Dossier shape
+    // (matching the OpenAPI contract exactly).
+    const [updatedDossier] = await db
+      .select()
+      .from(dossiersTable)
+      .where(eq(dossiersTable.id, dossier.id))
+      .limit(1);
     const [prospect] = await db
       .select()
       .from(prospectProfilesTable)
       .where(eq(prospectProfilesTable.id, dossier.prospectId))
       .limit(1);
+    const [docCount] = await db
+      .select({ c: count() })
+      .from(documentsTable)
+      .where(eq(documentsTable.dossierId, dossier.id));
+    const [blockingCount] = await db
+      .select({ c: count() })
+      .from(conditionsTable)
+      .where(
+        and(
+          eq(conditionsTable.dossierId, dossier.id),
+          eq(conditionsTable.type, "blocking"),
+          eq(conditionsTable.status, "open"),
+        ),
+      );
+    const written = await db
+      .select()
+      .from(conditionsTable)
+      .where(inArray(conditionsTable.id, writtenIds));
 
     res.json({
-      dossier: {
-        id: updatedDossier.id,
-        status: updatedDossier.status,
-        prospectId: updatedDossier.prospectId,
-        updatedAt: updatedDossier.updatedAt.toISOString(),
-        prospect: prospect
-          ? {
-              id: prospect.id,
-              companyName: prospect.companyName,
-              contactName: prospect.contactName,
-            }
-          : null,
-      },
+      dossier: serializeDossier(
+        updatedDossier,
+        prospect,
+        Number(docCount?.c ?? 0),
+        Number(blockingCount?.c ?? 0),
+      ),
       conditions: written.map((c) => serializeConditionForOfficer(c)),
     });
   },
