@@ -602,3 +602,288 @@ export async function seedIfEmpty(): Promise<void> {
     "Demo seed completed",
   );
 }
+
+/**
+ * Idempotently insert the Aurora Bakkerij happy-path demo dossier into
+ * an existing database. Safe to call on every boot: it short-circuits
+ * when the demo prospect user already exists, so it never duplicates
+ * data. This exists separately from `seedIfEmpty()` because that helper
+ * only runs on a fully empty database — installations that were seeded
+ * before Aurora existed would otherwise never get the ready-to-send
+ * demo dossier.
+ */
+export async function ensureAuroraDemo(): Promise<void> {
+  const existing = await db
+    .select()
+    .from(usersTable)
+    .where(eq(usersTable.email, "demo@aurora-bakkerij.nl"))
+    .limit(1);
+  if (existing.length > 0) {
+    return;
+  }
+  logger.info("Backfilling Aurora demo dossier");
+  const hash = await hashPassword(TEMP_PASSWORD);
+
+  const [prospect4] = await db
+    .insert(usersTable)
+    .values({
+      email: "demo@aurora-bakkerij.nl",
+      passwordHash: hash,
+      role: "prospect",
+      displayName: "Sanne de Boer",
+      firstLoginCompleted: true,
+    })
+    .returning();
+  const [pp4] = await db
+    .insert(prospectProfilesTable)
+    .values({
+      userId: prospect4.id,
+      companyName: "Aurora Bakkerij B.V. (demo ready)",
+      contactName: "Sanne de Boer",
+      kvkNumber: "88991122",
+      phone: "+31 6 2233 4455",
+      source: "Geenbank afwijzing",
+      pipedriveDealId: "deal-1004",
+    })
+    .returning();
+  const [d4] = await db
+    .insert(dossiersTable)
+    .values({
+      prospectId: pp4.id,
+      status: "approved_for_partner_submission",
+      currentStage: "Goedgekeurd voor partneraanbod",
+      financingPurpose:
+        "Uitbreiding bakkerij met tweede oven en aanschaf koeltoonbank voor nieuwe vestiging Zwolle",
+      requestedAmount: "140000",
+      financingTypePreference: "Investeringslening",
+      existingFinancing: "Rekening-courant €15.000 (volledig benut)",
+      annualRevenue: "820000",
+      annualCost: "640000",
+      annualProfit: "180000",
+      companyDescription:
+        "Ambachtelijke biologische bakkerij met twee bestaande vestigingen in Zwolle en Kampen. Sinds 2017 stabiele groei, sterke lokale merkbekendheid en B2B-leveringen aan hotels en lunchrooms.",
+      completenessScore: 88,
+      correctnessScore: 86,
+      viabilityScore: 82,
+      confidenceScore: 84,
+      aiVerdict: "kansrijk",
+      submittedAt: new Date(Date.now() - 5 * 86400000),
+    })
+    .returning();
+
+  const docTypes = ["annual_accounts", "bank_statements", "kvk_extract", "id_document"];
+  for (const t of docTypes) {
+    await db.insert(documentsTable).values({
+      dossierId: d4.id,
+      uploadedBy: prospect4.id,
+      documentType: t,
+      filename: `${t}.pdf`,
+      mimeType: "application/pdf",
+      sizeBytes: 260000,
+      storagePath: `mock://dossiers/${d4.id}/${t}.pdf`,
+      uploadStatus: "uploaded",
+      validationStatus: "valid",
+      extractedDataStatus: "extracted",
+      usedInAnalysis: true,
+    });
+  }
+
+  const auroraAnalysisStarted = new Date(Date.now() - 4 * 86400000);
+  const auroraAnalysisCompleted = new Date(
+    auroraAnalysisStarted.getTime() + 60_000,
+  );
+  await db.insert(aiAnalysisRunsTable).values({
+    dossierId: d4.id,
+    runType: "full_analysis",
+    status: "completed",
+    startedAt: auroraAnalysisStarted,
+    completedAt: auroraAnalysisCompleted,
+    skillModulesUsed: [
+      "GeenbankKredietworkflow",
+      "MoneycareFinancier",
+      "FinancingProductAdvisorDualView",
+    ],
+    skillInvocations: [
+      {
+        skillName: "FinancingProductAdvisorDualView",
+        provider: "mock",
+        usedMockMode: true,
+        model: "mock-dualview-v1",
+        durationMs: 1200,
+        startedAt: auroraAnalysisStarted.toISOString(),
+        completedAt: auroraAnalysisCompleted.toISOString(),
+        extras: {
+          partnerView: {
+            recommended_product: "Investeringslening 7 jaar lineair",
+            alternative_product: "Investeringslening 5 jaar annuïtair",
+            recommended_product_mix: ["Investeringslening", "Werkkapitaal"],
+            recommendation_status: "strong",
+            rationale: [
+              "Stabiele EBITDA-marge boven 20% in laatste drie boekjaren.",
+              "Sterke lokale merkbekendheid en bestaande B2B-contracten.",
+              "Tweede oven verhoogt productiecapaciteit met 40%.",
+            ],
+            key_risks: [
+              "Personeelskosten stijgen door extra vestiging.",
+              "Concurrentie van industriële bakkerijen in regio.",
+            ],
+            evidence_gaps: [],
+            indicative_structure: {
+              amount: 140000,
+              tenor_months: 84,
+              repayment_logic: "Lineaire aflossing in 84 maanden",
+              collateral_logic: "Pandrecht op bedrijfsmiddelen + UBO-garantie",
+              conditions: [
+                "Maandelijkse rapportage cashflow eerste 12 maanden",
+                "Verzekering nieuwe oven verplicht",
+              ],
+            },
+            shortlisted_products: [
+              {
+                name: "Investeringslening 7 jaar lineair",
+                fit_score: 92,
+                rationale: "Past bij investeringshorizon en cashflow-patroon.",
+              },
+              {
+                name: "Investeringslening 5 jaar annuïtair",
+                fit_score: 78,
+                rationale: "Snellere afbouw maar hogere maandlasten.",
+              },
+            ],
+          },
+        },
+      },
+    ],
+    completenessScore: 88,
+    correctnessScore: 86,
+    viabilityScore: 82,
+    confidenceScore: 84,
+    verdict: "kansrijk",
+    verdictSummary:
+      "Bakkerij met stabiele groei en sterke marges. Investering versterkt capaciteit en marktpositie.",
+    entrepreneurReport: {
+      summary:
+        "Aurora Bakkerij is een gezonde, groeiende ambachtelijke bakkerij met goede vooruitzichten.",
+      strongPoints: [
+        "Drie jaar op rij winstgevend met stijgende marge",
+        "Sterke lokale merkbekendheid",
+        "Bestaande B2B-contracten met hotels en lunchrooms",
+      ],
+      weakPoints: [
+        "Beperkte buffer voor onverwachte tegenvallers",
+        "Personeelskosten stijgen bij uitbreiding",
+      ],
+      canSubmit: true,
+      nextSteps: ["Documenten bevestigd", "Klaar voor kredietacceptant"],
+    },
+    financierReport: {
+      recommendation: "Akkoord met standaard zekerheden en cashflow-rapportage.",
+      repaymentCapacity:
+        "DSCR > 1.6 bij conservatieve aannames; 84-maands lineair past binnen verwachte vrije kasstroom (€2.100/mnd).",
+      riskFactors: [
+        "Loonkostenstijging tweede vestiging",
+        "Energieprijs-volatiliteit",
+      ],
+      strengths: [
+        "Aantoonbaar stabiele klantenbasis",
+        "Eigen vermogen 35% van balanstotaal",
+        "Lage debiteurentermijn (gemiddeld 14 dagen)",
+      ],
+      conditions: [
+        "Maandelijkse cashflow-rapportage eerste 12 maanden",
+        "Verzekering nieuwe oven verplicht",
+      ],
+    },
+    usedMockMode: true,
+    errors: [],
+  });
+
+  const auroraMemoCompleted = new Date(
+    auroraAnalysisCompleted.getTime() + 90_000,
+  );
+  await db.insert(aiAnalysisRunsTable).values({
+    dossierId: d4.id,
+    runType: "memorandum",
+    status: "completed",
+    startedAt: new Date(auroraAnalysisCompleted.getTime() + 30_000),
+    completedAt: auroraMemoCompleted,
+    skillModulesUsed: ["MoneycareKredietmemorandum"],
+    skillInvocations: [],
+    verdict: "kansrijk",
+    verdictSummary:
+      "Bakkerij met stabiele groei en sterke marges. Investering versterkt capaciteit en marktpositie.",
+    usedMockMode: true,
+    memorandum: {
+      usedMockMode: true,
+      verdict: "kansrijk",
+      attachments: [
+        "annual_accounts.pdf",
+        "bank_statements.pdf",
+        "kvk_extract.pdf",
+        "id_document.pdf",
+      ],
+      partnerNotes: null,
+      evidenceGaps: [],
+      partnerPackages: [],
+      sections: [
+        {
+          title: "1. Samenvatting",
+          body:
+            "Aurora Bakkerij B.V. (demo ready) vraagt €140.000 aan voor uitbreiding met een tweede oven en koeltoonbank.\nAI-oordeel: kansrijk — stabiele groei, sterke marges, lage debiteurentermijn.\nGeadviseerd product: Investeringslening 7 jaar lineair.",
+        },
+        {
+          title: "2. Onderneming en activiteit",
+          body:
+            "Bedrijfsnaam: Aurora Bakkerij B.V.\nKVK-nummer: 88991122\nContactpersoon: Sanne de Boer\nTelefoon: +31 6 2233 4455\nOmschrijving: Ambachtelijke biologische bakkerij met twee bestaande vestigingen in Zwolle en Kampen.",
+        },
+        {
+          title: "3. Financieringsvraag",
+          body:
+            "Bedrag: €140.000\nType voorkeur: Investeringslening\nBestaande financiering: Rekening-courant €15.000 (volledig benut)",
+        },
+        {
+          title: "4. Doel van de financiering",
+          body:
+            "Uitbreiding bakkerij met tweede oven en aanschaf koeltoonbank voor nieuwe vestiging Zwolle.",
+        },
+        {
+          title: "5. Historische cijfers en kerncijfers",
+          body:
+            "Jaaromzet: €820.000\nJaarkosten: €640.000\nJaarwinst: €180.000\nMarge: 22.0%\nCompleetheid intake: 88\nLevensvatbaarheid: 82",
+        },
+        {
+          title: "6. Aflossingscapaciteit",
+          body:
+            "DSCR > 1.6 bij conservatieve aannames; 84-maands lineair past binnen verwachte vrije kasstroom (€2.100/mnd).",
+        },
+        {
+          title: "7. Risicoanalyse",
+          body:
+            "• Loonkostenstijging tweede vestiging\n• Energieprijs-volatiliteit",
+        },
+        {
+          title: "8. Mitigerende factoren en sterktes",
+          body:
+            "• Aantoonbaar stabiele klantenbasis\n• Eigen vermogen 35% van balanstotaal\n• Lage debiteurentermijn (gemiddeld 14 dagen)",
+        },
+        {
+          title: "9. Zekerheden en structuur",
+          body:
+            "Bedrag: €140.000 | Looptijd: 84 maanden\nAflossing: Lineaire aflossing in 84 maanden\nZekerheden: Pandrecht op bedrijfsmiddelen + UBO-garantie",
+        },
+        {
+          title: "10. Productadvies",
+          body:
+            "Aanbevolen: Investeringslening 7 jaar lineair\nAlternatief: Investeringslening 5 jaar annuïtair\nMix: Investeringslening, Werkkapitaal",
+        },
+        {
+          title: "11. Openstaande voorwaarden",
+          body: "Geen openstaande voorwaarden.",
+        },
+      ],
+    },
+    errors: [],
+  });
+
+  logger.info({ dossierId: d4.id }, "Aurora demo dossier backfilled");
+}

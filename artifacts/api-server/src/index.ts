@@ -1,6 +1,6 @@
 import app from "./app";
 import { logger } from "./lib/logger";
-import { seedIfEmpty } from "./lib/seed";
+import { seedIfEmpty, ensureAuroraDemo } from "./lib/seed";
 
 const rawPort = process.env["PORT"];
 
@@ -29,6 +29,7 @@ app.listen(port, async (err) => {
   } else {
     try {
       await seedIfEmpty();
+      await ensureAuroraDemo();
     } catch (e) {
       logger.error({ err: e }, "Seed failed");
     }
