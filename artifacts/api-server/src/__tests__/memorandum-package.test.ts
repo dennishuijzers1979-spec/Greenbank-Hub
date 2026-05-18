@@ -436,22 +436,45 @@ test("prospect-facing dossier endpoint never leaks memorandum or financier data"
     {},
   );
 
-  const r = await apiGet(`/dossiers/${ctx.dossierId}`, ctx.prospectSession);
-  // Prospect may be able to view their own dossier shell, but it must
-  // never contain memorandum/financier internals. Status strings like
-  // "memorandum_generated" are allowed; payload fields are not.
-  if (r.status === 200) {
-    const obj = asRecord(r.json);
-    assert.equal(obj.memorandum, undefined, "prospect must not receive memorandum field");
-    assert.equal(obj.financierReport, undefined, "prospect must not receive financierReport field");
-    assert.equal(obj.partnerPackages, undefined, "prospect must not receive partnerPackages field");
-    assert.equal(obj.evidenceGaps, undefined, "prospect must not receive evidenceGaps field");
-    // Section bodies use this exact phrase — must not appear anywhere.
-    const serialized = JSON.stringify(r.json);
+  // Hit every endpoint the prospect can actually reach with their own
+  // session token and assert none of them leak memorandum/financier
+  // internals or the "Niet beschikbaar" evidence-gap markers used inside
+  // memo sections. We don't tolerate a leak via _any_ prospect endpoint.
+  const prospectEndpoints = [
+    "/dossiers/me",
+    "/dossiers/me/conditions",
+  ];
+  for (const path of prospectEndpoints) {
+    const r = await apiGet(path, ctx.prospectSession);
+    assert.ok(
+      r.status === 200 || r.status === 404,
+      `${path} expected 200/404 for prospect, got ${r.status}`,
+    );
+    const serialized = JSON.stringify(r.json ?? {});
+    assert.equal(
+      /financierReport|financier_report/i.test(serialized),
+      false,
+      `${path} must not include financier report contents`,
+    );
+    assert.equal(
+      /partnerPackages|evidenceGaps/i.test(serialized),
+      false,
+      `${path} must not include partner-package / evidence-gap fields`,
+    );
     assert.equal(
       /Niet beschikbaar/i.test(serialized),
       false,
-      "prospect must not see evidence-gap markers",
+      `${path} must not surface memo evidence-gap markers`,
     );
+    // Allow the literal status string "memorandum_generated" but reject
+    // a "memorandum" payload key (memo body leakage).
+    if (r.status === 200 && r.json && typeof r.json === "object") {
+      const obj = r.json as Record<string, unknown>;
+      assert.equal(
+        obj.memorandum,
+        undefined,
+        `${path} must not include memorandum payload`,
+      );
+    }
   }
 });
