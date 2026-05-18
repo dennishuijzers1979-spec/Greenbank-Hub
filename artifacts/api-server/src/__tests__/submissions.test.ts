@@ -24,6 +24,7 @@ import {
   sessionsTable,
   prospectProfilesTable,
   dossiersTable,
+  documentsTable,
   conditionsTable,
   activityLogsTable,
   partnerFinanciersTable,
@@ -58,6 +59,12 @@ after(async () => {
     await db
       .delete(activityLogsTable)
       .where(inArray(activityLogsTable.dossierId, createdDossierIds));
+    await db
+      .delete(aiAnalysisRunsTable)
+      .where(inArray(aiAnalysisRunsTable.dossierId, createdDossierIds));
+    await db
+      .delete(documentsTable)
+      .where(inArray(documentsTable.dossierId, createdDossierIds));
     await db
       .delete(conditionsTable)
       .where(inArray(conditionsTable.dossierId, createdDossierIds));
@@ -132,8 +139,13 @@ async function createProspectWithDossier(opts: {
     .values({
       prospectId: prospect.id,
       status: opts.status,
-      requestedAmount: opts.requestedAmount?.toString() ?? null,
+      requestedAmount: opts.requestedAmount?.toString() ?? "100000",
       financingPurpose: "werkkapitaal",
+      completenessScore: 85,
+      correctnessScore: 80,
+      viabilityScore: 75,
+      confidenceScore: 78,
+      aiVerdict: "kansrijk",
     })
     .returning();
   createdDossierIds.push(dossier.id);
@@ -165,19 +177,57 @@ async function createPartner(opts?: {
  * memorandum gate. Submissions now require an existing
  * `memorandum`-type AI analysis run.
  */
-async function seedMemorandum(dossierId: string): Promise<void> {
+async function seedMemorandum(dossierId: string, uploadedBy?: string): Promise<void> {
+  const uploader = uploadedBy ?? (await createUser("loan_officer")).userId;
+  // Seed the supporting data the readiness gate requires: at least one
+  // valid document and a completed full_analysis run with passing
+  // scores. Without these the (legitimate) readiness check returns 409
+  // "Pakket niet compleet" and these submission-flow tests can't
+  // exercise the happy path.
+  await db.insert(documentsTable).values({
+    dossierId,
+    uploadedBy: uploader,
+    documentType: "annual_accounts",
+    filename: "annual_accounts.pdf",
+    mimeType: "application/pdf",
+    sizeBytes: 100000,
+    storagePath: `mock://${dossierId}/annual_accounts.pdf`,
+    uploadStatus: "uploaded",
+    validationStatus: "valid",
+    extractedDataStatus: "extracted",
+    usedInAnalysis: true,
+  });
+  await db.insert(aiAnalysisRunsTable).values({
+    dossierId,
+    runType: "full_analysis",
+    status: "completed",
+    completedAt: new Date(Date.now() - 60_000),
+    completenessScore: 85,
+    correctnessScore: 80,
+    viabilityScore: 75,
+    confidenceScore: 78,
+    verdict: "kansrijk",
+    verdictSummary: "Test analyse.",
+    usedMockMode: true,
+  });
   await db.insert(aiAnalysisRunsTable).values({
     dossierId,
     runType: "memorandum",
     status: "completed",
     completedAt: new Date(),
     memorandum: {
-      sections: [{ title: "1. Samenvatting", body: "Mock samenvatting." }],
+      sections: [
+        { title: "1. Samenvatting", body: "Mock samenvatting." },
+        { title: "2. Onderneming en activiteit", body: "Mock onderneming." },
+        { title: "3. Financieringsvraag", body: "Mock vraag." },
+        { title: "4. Doel", body: "Mock doel." },
+        { title: "5. Kerncijfers", body: "Mock cijfers." },
+      ],
       attachments: [],
       partnerNotes: null,
       partnerPackages: [],
       evidenceGaps: [],
-      verdict: "go",
+      verdict: "kansrijk",
       usedMockMode: true,
     },
     usedMockMode: true,

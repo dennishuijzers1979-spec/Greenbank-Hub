@@ -20,6 +20,7 @@ import { logActivity } from "../lib/activity";
 import { serializeSubmission } from "../lib/serializers";
 import { sendEmail } from "../lib/integrations";
 import { officerCanAccessDossier } from "../lib/dossier-access";
+import { computePackageReadiness } from "../lib/skill-orchestration";
 
 const router: IRouter = Router();
 
@@ -169,6 +170,24 @@ router.post("/dossiers/:dossierId/submissions", requireAuth(["loan_officer", "ad
           error: "Geen kredietmemorandum",
           message:
             "Genereer eerst een kredietmemorandum voordat je het dossier bij partners indient.",
+          missingItems: ["Kredietmemorandum nog niet gegenereerd."],
+        },
+      };
+    }
+    // Authoritative readiness gate — even when a memo exists it may be a
+    // draft on an incomplete dossier (missing analysis, low scores, no
+    // valid documents, etc.). Block the mock-send and surface the Dutch
+    // missing-items checklist so the UI can render it directly.
+    const readiness = await computePackageReadiness(params.data.dossierId);
+    if (!readiness.ready) {
+      return {
+        ok: false,
+        httpStatus: 409,
+        payload: {
+          error: "Pakket niet compleet",
+          message:
+            "Het aanbiedpakket is nog niet compleet — los de onderstaande punten op voordat je het dossier bij partners indient.",
+          missingItems: readiness.missingItems,
         },
       };
     }

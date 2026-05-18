@@ -43,6 +43,159 @@ export {
 export { isAiLive } from "./skills/types";
 export { describeAiRuntime, resolveSkillRuntime } from "./skills/runtime";
 
+/**
+ * Result of a package-readiness check. A "ready" package may be sent to
+ * partners (memorandum + supporting data are complete enough to share);
+ * a "draft" package may exist for officer preview but must not be
+ * mock-sent. Frontend and backend both consult this — the backend is the
+ * authoritative gate enforced on `POST /dossiers/:id/submissions`.
+ */
+export type PackageReadiness = {
+  ready: boolean;
+  draft: boolean;
+  missingItems: string[];
+};
+
+/**
+ * Authoritative server-side check for whether a dossier's partner package
+ * is complete enough to mock-send. Combines: a completed AI analysis with
+ * a verdict and gate-passing scores, a requested amount and purpose, at
+ * least one validated document, no open blocking conditions, and a
+ * generated memorandum with meaningful (non-"Niet beschikbaar") sections.
+ *
+ * Returns `ready: true` only when EVERY requirement is met. Otherwise
+ * `ready: false` together with a Dutch `missingItems` list the UI can
+ * render directly. `draft` mirrors `!ready` so callers can label the
+ * memo state ("Conceptmemorandum" vs "Aanbiedpakket gereed").
+ */
+export async function computePackageReadiness(
+  dossierId: string,
+): Promise<PackageReadiness> {
+  const [dossier] = await db
+    .select()
+    .from(dossiersTable)
+    .where(eq(dossiersTable.id, dossierId))
+    .limit(1);
+  if (!dossier) {
+    return {
+      ready: false,
+      draft: true,
+      missingItems: ["Dossier niet gevonden."],
+    };
+  }
+  const missingItems: string[] = [];
+
+  const runs = await db
+    .select()
+    .from(aiAnalysisRunsTable)
+    .where(eq(aiAnalysisRunsTable.dossierId, dossierId))
+    .orderBy(desc(aiAnalysisRunsTable.startedAt));
+  const analysis = runs.find(
+    (r) =>
+      (r.runType === "prevalidation" || r.runType === "full_analysis") &&
+      r.status === "completed",
+  );
+  if (!analysis) {
+    missingItems.push("Geen afgeronde AI-analyse beschikbaar.");
+  }
+
+  const verdict = dossier.aiVerdict ?? analysis?.verdict ?? null;
+  if (!verdict) missingItems.push("AI-verdict ontbreekt.");
+
+  const completeness = dossier.completenessScore ?? analysis?.completenessScore ?? null;
+  const correctness = dossier.correctnessScore ?? analysis?.correctnessScore ?? null;
+  const viability = dossier.viabilityScore ?? analysis?.viabilityScore ?? null;
+  const confidence = dossier.confidenceScore ?? analysis?.confidenceScore ?? null;
+  if (completeness === null) {
+    missingItems.push("Compleetheidsscore ontbreekt.");
+  } else if (completeness < GATE_THRESHOLDS.completeness) {
+    missingItems.push(
+      `Compleetheidsscore (${completeness}) onder drempel ${GATE_THRESHOLDS.completeness}.`,
+    );
+  }
+  if (correctness === null) {
+    missingItems.push("Correctheidsscore ontbreekt.");
+  } else if (correctness < GATE_THRESHOLDS.correctness) {
+    missingItems.push(
+      `Correctheidsscore (${correctness}) onder drempel ${GATE_THRESHOLDS.correctness}.`,
+    );
+  }
+  if (viability === null) {
+    missingItems.push("Levensvatbaarheidsscore ontbreekt.");
+  } else if (viability < GATE_THRESHOLDS.viability) {
+    missingItems.push(
+      `Levensvatbaarheidsscore (${viability}) onder drempel ${GATE_THRESHOLDS.viability}.`,
+    );
+  }
+  if (confidence === null) {
+    missingItems.push("Vertrouwensscore ontbreekt.");
+  } else if (confidence < GATE_THRESHOLDS.confidence) {
+    missingItems.push(
+      `Vertrouwensscore (${confidence}) onder drempel ${GATE_THRESHOLDS.confidence}.`,
+    );
+  }
+
+  const docs = await db
+    .select()
+    .from(documentsTable)
+    .where(eq(documentsTable.dossierId, dossierId));
+  const validDocs = docs.filter((d) => d.validationStatus === "valid");
+  if (validDocs.length === 0) {
+    missingItems.push("Geen gevalideerde documenten gekoppeld.");
+  }
+
+  const requested =
+    dossier.requestedAmount !== null ? Number(dossier.requestedAmount) : null;
+  if (requested === null || !Number.isFinite(requested) || requested <= 0) {
+    missingItems.push("Gevraagd financieringsbedrag ontbreekt.");
+  }
+
+  if (!dossier.financingPurpose || dossier.financingPurpose.trim().length === 0) {
+    missingItems.push("Financieringsdoel ontbreekt.");
+  }
+
+  const blockingOpen = await db
+    .select()
+    .from(conditionsTable)
+    .where(
+      and(
+        eq(conditionsTable.dossierId, dossierId),
+        eq(conditionsTable.type, "blocking"),
+        ne(conditionsTable.status, "resolved"),
+      ),
+    );
+  if (blockingOpen.length > 0) {
+    missingItems.push(
+      `${blockingOpen.length} openstaande blokkerende voorwaarde(n).`,
+    );
+  }
+
+  const memoRun = runs.find(
+    (r) => r.runType === "memorandum" && r.memorandum,
+  );
+  if (!memoRun) {
+    missingItems.push("Kredietmemorandum nog niet gegenereerd.");
+  } else {
+    const memo = memoRun.memorandum as
+      | { sections?: Array<{ title: string; body: string }> }
+      | null;
+    const meaningful = (memo?.sections ?? []).filter((s) => {
+      const body = (s.body ?? "").trim();
+      if (body.length === 0) return false;
+      if (/^Niet beschikbaar\.?$/i.test(body)) return false;
+      return true;
+    });
+    if (meaningful.length < 5) {
+      missingItems.push(
+        "Memorandum bevat te weinig gevulde secties (te veel 'Niet beschikbaar').",
+      );
+    }
+  }
+
+  const ready = missingItems.length === 0;
+  return { ready, draft: !ready, missingItems };
+}
+
 export type RunAnalysisGateResult =
   | { ok: true }
   | {
@@ -348,18 +501,38 @@ class SkillOrchestrationService {
       })
       .returning();
 
-    // Only advance to memorandum_generated when the dossier isn't already
-    // further along (e.g. partner-submitted) — re-generating the memo
-    // mid-flow must never downgrade the dossier status.
+    // Only advance to memorandum_generated when (a) the dossier isn't
+    // already further along (e.g. partner-submitted) — re-generating the
+    // memo mid-flow must never downgrade the dossier status — AND (b)
+    // the package is actually READY for partners. A draft memo on an
+    // incomplete dossier must NOT flip the status to "Memorandum
+    // gegenereerd"; that label is reserved for ready packages so loan
+    // officers don't mistake a draft for a green light.
     const advanceableStatuses = new Set([
       "approved_for_partner_submission",
       "memorandum_generated",
     ]);
     if (advanceableStatuses.has(ctx.dossier.status)) {
-      await db
-        .update(dossiersTable)
-        .set({ status: "memorandum_generated", updatedAt: new Date() })
-        .where(eq(dossiersTable.id, dossierId));
+      const readiness = await computePackageReadiness(dossierId);
+      if (readiness.ready) {
+        await db
+          .update(dossiersTable)
+          .set({ status: "memorandum_generated", updatedAt: new Date() })
+          .where(eq(dossiersTable.id, dossierId));
+      } else if (ctx.dossier.status === "memorandum_generated") {
+        // The dossier was previously ready but a subsequent change
+        // (e.g. an analysis re-run with lower scores, a new blocking
+        // condition) made it no longer ready. Roll the status back to
+        // "approved_for_partner_submission" so the UI no longer claims
+        // the memo is ready to send.
+        await db
+          .update(dossiersTable)
+          .set({
+            status: "approved_for_partner_submission",
+            updatedAt: new Date(),
+          })
+          .where(eq(dossiersTable.id, dossierId));
+      }
     }
 
     return { runId: run.id, memorandum: result.data };

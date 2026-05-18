@@ -28,6 +28,7 @@ import {
   sessionsTable,
   prospectProfilesTable,
   dossiersTable,
+  documentsTable,
   conditionsTable,
   activityLogsTable,
   partnerFinanciersTable,
@@ -335,6 +336,31 @@ test("submission packageSummary references the memorandum and logs memorandumRun
     requestedAmount: 150_000,
   });
   await insertPrevalidationRun(ctx.dossierId);
+  // Readiness gate requires dossier scores + at least one valid document
+  // before the submission endpoint will accept a mock-send.
+  await db
+    .update(dossiersTable)
+    .set({
+      completenessScore: 88,
+      correctnessScore: 86,
+      viabilityScore: 82,
+      confidenceScore: 84,
+      aiVerdict: "kansrijk",
+    })
+    .where(eq(dossiersTable.id, ctx.dossierId));
+  await db.insert(documentsTable).values({
+    dossierId: ctx.dossierId,
+    uploadedBy: officer.userId,
+    documentType: "annual_accounts",
+    filename: "jaarrekening.pdf",
+    mimeType: "application/pdf",
+    sizeBytes: 100000,
+    storagePath: `mock://${ctx.dossierId}/jaarrekening.pdf`,
+    uploadStatus: "uploaded",
+    validationStatus: "valid",
+    extractedDataStatus: "extracted",
+    usedInAnalysis: true,
+  });
   const partnerId = await createPartner();
 
   const gen = await apiPost(

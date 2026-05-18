@@ -18,6 +18,7 @@ import { extractDualViewAdvice } from "../lib/skills/dual-view-advice";
 import { requireAuth } from "../lib/auth";
 import { logActivity } from "../lib/activity";
 import { serializeRun, serializeRunForProspect } from "../lib/serializers";
+import { computePackageReadiness } from "../lib/skill-orchestration";
 import {
   skillOrchestrationService,
   checkRunAnalysisGate,
@@ -334,16 +335,21 @@ router.post(
       params.data.dossierId,
       partnerIds,
     );
+    const readiness = await computePackageReadiness(params.data.dossierId);
     await logActivity({
       dossierId: params.data.dossierId,
       actor: req.user!,
       action: "memorandum_generated",
-      description: "Kredietmemorandum gegenereerd.",
+      description: readiness.ready
+        ? "Kredietmemorandum gegenereerd (pakket gereed)."
+        : "Conceptmemorandum gegenereerd (pakket nog niet compleet).",
       metadata: {
         memorandumRunId: runId,
         partnerIds,
         evidenceGaps: memorandum.evidenceGaps.length,
         sections: memorandum.sections.length,
+        ready: readiness.ready,
+        missingReadinessItems: readiness.missingItems,
       },
     });
     res.json({
@@ -358,6 +364,9 @@ router.post(
       verdict: memorandum.verdict,
       stale: false,
       staleReason: null,
+      ready: readiness.ready,
+      draft: readiness.draft,
+      missingReadinessItems: readiness.missingItems,
     });
   },
 );
@@ -396,6 +405,7 @@ router.get(
     const stale = Boolean(latestAnalysis && anaTs > memoTs);
 
     const m = memoRun.memorandum as Record<string, unknown>;
+    const readiness = await computePackageReadiness(params.data.dossierId);
     res.json({
       dossierId: params.data.dossierId,
       generatedAt: (memoRun.completedAt ?? memoRun.startedAt).toISOString(),
@@ -410,6 +420,9 @@ router.get(
       staleReason: stale
         ? "Er is een nieuwere AI-analyse uitgevoerd na dit memorandum. Genereer opnieuw om de laatste cijfers te gebruiken."
         : null,
+      ready: readiness.ready,
+      draft: readiness.draft,
+      missingReadinessItems: readiness.missingItems,
     });
   },
 );

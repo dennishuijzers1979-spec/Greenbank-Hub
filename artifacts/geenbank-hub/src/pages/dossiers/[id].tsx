@@ -1442,6 +1442,30 @@ export default function DossierDetail() {
             <CardContent>
               {memo ? (
                 <div className="space-y-6 pt-2">
+                  <div className="flex flex-wrap items-center gap-2" data-testid="memo-readiness-badge">
+                    {memo.ready ? (
+                      <Badge className="bg-green-100 text-green-800 border-green-300 border" data-testid="badge-package-ready">
+                        Aanbiedpakket gereed
+                      </Badge>
+                    ) : (
+                      <Badge variant="outline" className="border-amber-300 text-amber-800 bg-amber-50" data-testid="badge-package-draft">
+                        Conceptmemorandum · Pakket niet compleet
+                      </Badge>
+                    )}
+                  </div>
+                  {memo.draft && memo.missingReadinessItems && memo.missingReadinessItems.length > 0 && (
+                    <Alert data-testid="memo-readiness-checklist" className="border-amber-300 bg-amber-50 text-amber-900">
+                      <AlertCircle className="w-4 h-4" />
+                      <AlertTitle>Nog te doen voor partneraanbod ({memo.missingReadinessItems.length})</AlertTitle>
+                      <AlertDescription>
+                        <ul className="list-disc pl-5 mt-1 space-y-0.5 text-xs">
+                          {memo.missingReadinessItems.map((g, i) => (
+                            <li key={i} data-testid={`readiness-missing-${i}`}>{g}</li>
+                          ))}
+                        </ul>
+                      </AlertDescription>
+                    </Alert>
+                  )}
                   {memo.stale && (
                     <Alert variant="destructive" data-testid="memo-stale-banner" className="border-amber-300 bg-amber-50 text-amber-900">
                       <AlertTriangle className="w-4 h-4" />
@@ -1633,6 +1657,23 @@ export default function DossierDetail() {
                   </Alert>
                 )}
 
+                {memo && !memo.ready && memo.missingReadinessItems && memo.missingReadinessItems.length > 0 && (
+                  <Alert variant="destructive" data-testid="partners-readiness-checklist" className="border-amber-300 bg-amber-50 text-amber-900">
+                    <AlertCircle className="w-4 h-4" />
+                    <AlertTitle>Pakket niet compleet</AlertTitle>
+                    <AlertDescription>
+                      <p className="text-xs mb-1">
+                        Los eerst de volgende punten op voordat het dossier bij partners kan worden ingediend:
+                      </p>
+                      <ul className="list-disc pl-5 mt-1 space-y-0.5 text-xs">
+                        {memo.missingReadinessItems.map((g, i) => (
+                          <li key={i} data-testid={`partners-readiness-missing-${i}`}>{g}</li>
+                        ))}
+                      </ul>
+                    </AlertDescription>
+                  </Alert>
+                )}
+
                 <div className="flex gap-2 pt-2">
                   <Button
                     variant="outline"
@@ -1643,7 +1684,7 @@ export default function DossierDetail() {
                   </Button>
                   <Button
                     className="flex-1"
-                    disabled={selectedPartners.length === 0 || submitPartnerMutation.isPending || !memo}
+                    disabled={selectedPartners.length === 0 || submitPartnerMutation.isPending || !memo || !memo.ready}
                     onClick={openPackagePreview}
                     data-testid="button-prepare-package"
                   >
@@ -1886,7 +1927,7 @@ export default function DossierDetail() {
             </Button>
             <Button
               onClick={handleSubmitToPartners}
-              disabled={submitPartnerMutation.isPending}
+              disabled={submitPartnerMutation.isPending || !memo || !memo.ready}
               data-testid="button-confirm-mock-send"
             >
               {submitPartnerMutation.isPending ? (

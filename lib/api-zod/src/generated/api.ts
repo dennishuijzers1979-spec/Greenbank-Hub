@@ -840,6 +840,10 @@ export const GenerateMemorandumParams = zod.object({
   dossierId: zod.coerce.string(),
 });
 
+export const GenerateMemorandumBody = zod.object({
+  partnerIds: zod.array(zod.string()).optional(),
+});
+
 export const GenerateMemorandumResponse = zod.object({
   dossierId: zod.string(),
   generatedAt: zod.string(),
@@ -852,6 +856,36 @@ export const GenerateMemorandumResponse = zod.object({
   ),
   attachments: zod.array(zod.string()),
   partnerNotes: zod.string().nullish(),
+  partnerPackages: zod.array(
+    zod.object({
+      partnerId: zod.string(),
+      partnerName: zod.string(),
+      productFocus: zod.string(),
+      ticketRange: zod.string().nullish(),
+      fitsTicketRange: zod.boolean(),
+      partnerNotes: zod.string().nullish(),
+      packageSummary: zod.string(),
+    }),
+  ),
+  evidenceGaps: zod.array(zod.string()),
+  verdict: zod.string().nullish(),
+  stale: zod.boolean(),
+  staleReason: zod.string().nullish(),
+  ready: zod
+    .boolean()
+    .describe(
+      "True when the partner package satisfies every readiness rule\n(completed AI analysis with passing scores, valid documents,\nrequested amount + purpose present, no open blocking\nconditions, memo sections meaningfully filled). The mock\npartner submission endpoint enforces this server-side.\n",
+    ),
+  draft: zod
+    .boolean()
+    .describe(
+      'Convenience alias of `!ready` — when true the memo should be labelled \"Conceptmemorandum\" in the UI.',
+    ),
+  missingReadinessItems: zod
+    .array(zod.string())
+    .describe(
+      "Dutch checklist of items still required before the package may be sent to partners. Empty when `ready` is true.",
+    ),
 });
 
 /**
@@ -873,6 +907,36 @@ export const GetMemorandumResponse = zod.object({
   ),
   attachments: zod.array(zod.string()),
   partnerNotes: zod.string().nullish(),
+  partnerPackages: zod.array(
+    zod.object({
+      partnerId: zod.string(),
+      partnerName: zod.string(),
+      productFocus: zod.string(),
+      ticketRange: zod.string().nullish(),
+      fitsTicketRange: zod.boolean(),
+      partnerNotes: zod.string().nullish(),
+      packageSummary: zod.string(),
+    }),
+  ),
+  evidenceGaps: zod.array(zod.string()),
+  verdict: zod.string().nullish(),
+  stale: zod.boolean(),
+  staleReason: zod.string().nullish(),
+  ready: zod
+    .boolean()
+    .describe(
+      "True when the partner package satisfies every readiness rule\n(completed AI analysis with passing scores, valid documents,\nrequested amount + purpose present, no open blocking\nconditions, memo sections meaningfully filled). The mock\npartner submission endpoint enforces this server-side.\n",
+    ),
+  draft: zod
+    .boolean()
+    .describe(
+      'Convenience alias of `!ready` — when true the memo should be labelled \"Conceptmemorandum\" in the UI.',
+    ),
+  missingReadinessItems: zod
+    .array(zod.string())
+    .describe(
+      "Dutch checklist of items still required before the package may be sent to partners. Empty when `ready` is true.",
+    ),
 });
 
 /**

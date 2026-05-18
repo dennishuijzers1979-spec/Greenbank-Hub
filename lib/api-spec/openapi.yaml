@@ -1223,6 +1223,23 @@ components:
         verdict: { type: string, nullable: true }
         stale: { type: boolean }
         staleReason: { type: string, nullable: true }
+        ready:
+          type: boolean
+          description: |
+            True when the partner package satisfies every readiness rule
+            (completed AI analysis with passing scores, valid documents,
+            requested amount + purpose present, no open blocking
+            conditions, memo sections meaningfully filled). The mock
+            partner submission endpoint enforces this server-side.
+        draft:
+          type: boolean
+          description: Convenience alias of `!ready` — when true the memo
+            should be labelled "Conceptmemorandum" in the UI.
+        missingReadinessItems:
+          type: array
+          items: { type: string }
+          description: Dutch checklist of items still required before the
+            package may be sent to partners. Empty when `ready` is true.
       required:
         - dossierId
         - generatedAt
@@ -1232,6 +1249,9 @@ components:
         - partnerPackages
         - evidenceGaps
         - stale
+        - ready
+        - draft
+        - missingReadinessItems
 
     MemorandumRequest:
       type: object

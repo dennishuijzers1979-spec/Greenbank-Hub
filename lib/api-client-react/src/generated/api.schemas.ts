@@ -343,6 +343,16 @@ export interface MemorandumSection {
   body: string;
 }
 
+export interface MemorandumPartnerPackage {
+  partnerId: string;
+  partnerName: string;
+  productFocus: string;
+  ticketRange?: string | null;
+  fitsTicketRange: boolean;
+  partnerNotes?: string | null;
+  packageSummary: string;
+}
+
 export interface CreditMemorandum {
   dossierId: string;
   generatedAt: string;
@@ -350,6 +360,26 @@ export interface CreditMemorandum {
   sections: MemorandumSection[];
   attachments: string[];
   partnerNotes?: string | null;
+  partnerPackages: MemorandumPartnerPackage[];
+  evidenceGaps: string[];
+  verdict?: string | null;
+  stale: boolean;
+  staleReason?: string | null;
+  /** True when the partner package satisfies every readiness rule
+(completed AI analysis with passing scores, valid documents,
+requested amount + purpose present, no open blocking
+conditions, memo sections meaningfully filled). The mock
+partner submission endpoint enforces this server-side.
+ */
+  ready: boolean;
+  /** Convenience alias of `!ready` — when true the memo should be labelled "Conceptmemorandum" in the UI. */
+  draft: boolean;
+  /** Dutch checklist of items still required before the package may be sent to partners. Empty when `ready` is true. */
+  missingReadinessItems: string[];
+}
+
+export interface MemorandumRequest {
+  partnerIds?: string[];
 }
 
 export type ConditionType = (typeof ConditionType)[keyof typeof ConditionType];
