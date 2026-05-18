@@ -5,7 +5,9 @@ import {
   documentsTable,
   aiAnalysisRunsTable,
   conditionsTable,
+  partnerFinanciersTable,
   prospectProfilesTable,
+  type ProspectProfile,
 } from "@workspace/db";
 import {
   CreditProductAdvisorAdapter,
@@ -17,12 +19,14 @@ import {
   REQUIRED_DOCUMENT_TYPES,
   SKILL_MODULES,
   type AnalysisOutput,
+  type EntrepreneurReport,
   type FinancierReport,
   type Memorandum,
   type SkillContext,
   type SkillInvocation,
   type SkillModule,
 } from "./skills";
+import { extractDualViewAdvice } from "./skills/dual-view-advice";
 
 export {
   GATE_THRESHOLDS,
@@ -213,24 +217,120 @@ class SkillOrchestrationService {
     return this.runStaged(dossierId, "full_analysis");
   }
 
-  /** Stage 3: build a credit memorandum off the latest analysis. */
-  async runMemorandum(dossierId: string): Promise<{
+  /**
+   * Stage 3: build a credit memorandum off the latest AI analysis. Pulls
+   * in dual-view advice, open + resolved conditions, prospect profile
+   * and (optionally) the partner selection so the adapter can render a
+   * full Dutch 14-section memorandum + per-partner package preview.
+   *
+   * When `partnerIds` is omitted, the memo is generated without partner
+   * packages — useful as an initial preview before the loan officer has
+   * picked partners.
+   */
+  async runMemorandum(
+    dossierId: string,
+    partnerIds: string[] = [],
+  ): Promise<{
     runId: string;
     memorandum: Memorandum;
   }> {
     const ctx = await this.loadContext(dossierId);
-    const [latest] = await db
+
+    // Newest analysis run with real scoring (skip the memorandum-only
+    // runs themselves so we always source from the latest prevalidation
+    // / full_analysis snapshot).
+    const runs = await db
       .select()
       .from(aiAnalysisRunsTable)
       .where(eq(aiAnalysisRunsTable.dossierId, dossierId))
-      .orderBy(desc(aiAnalysisRunsTable.startedAt))
-      .limit(1);
+      .orderBy(desc(aiAnalysisRunsTable.startedAt));
+    const latest =
+      runs.find((r) =>
+        ["prevalidation", "full_analysis"].includes(r.runType),
+      ) ?? null;
+
+    const dualView = latest ? extractDualViewAdvice(dossierId, latest) : null;
+
+    const [prospect] = ctx.dossier.prospectId
+      ? await db
+          .select()
+          .from(prospectProfilesTable)
+          .where(eq(prospectProfilesTable.id, ctx.dossier.prospectId))
+          .limit(1)
+      : [undefined as ProspectProfile | undefined];
+
+    const conditionsRows = await db
+      .select()
+      .from(conditionsTable)
+      .where(eq(conditionsTable.dossierId, dossierId));
+    const openConds = conditionsRows
+      .filter((c) => c.status !== "resolved")
+      .map((c) => ({
+        id: c.id,
+        type: c.type as "blocking" | "non_blocking",
+        title: c.title,
+        description: c.description,
+        requiredAction: c.requiredAction,
+        status: c.status,
+        reviewerNotes: c.reviewerNotes,
+      }));
+    const resolvedConds = conditionsRows
+      .filter((c) => c.status === "resolved")
+      .map((c) => ({
+        id: c.id,
+        type: c.type as "blocking" | "non_blocking",
+        title: c.title,
+        description: c.description,
+        requiredAction: c.requiredAction,
+        status: c.status,
+        reviewerNotes: c.reviewerNotes,
+      }));
+
+    const uniquePartnerIds = Array.from(new Set(partnerIds));
+    const partnerRows =
+      uniquePartnerIds.length > 0
+        ? await db
+            .select()
+            .from(partnerFinanciersTable)
+            .where(inArray(partnerFinanciersTable.id, uniquePartnerIds))
+        : [];
 
     const result = await MoneycareKredietmemorandumAdapter.buildMemorandum({
       ctx,
+      prospect: prospect
+        ? {
+            companyName: prospect.companyName,
+            contactName: prospect.contactName,
+            kvkNumber: prospect.kvkNumber,
+            phone: prospect.phone,
+          }
+        : null,
+      entrepreneurReport:
+        (latest?.entrepreneurReport as EntrepreneurReport | null | undefined) ??
+        null,
       financierReport:
         (latest?.financierReport as FinancierReport | null | undefined) ?? null,
       verdict: latest?.verdict ?? null,
+      verdictSummary: latest?.verdictSummary ?? null,
+      scores: {
+        completeness: latest?.completenessScore ?? null,
+        correctness: latest?.correctnessScore ?? null,
+        viability: latest?.viabilityScore ?? null,
+        confidence: latest?.confidenceScore ?? null,
+      },
+      dualView,
+      conditions: { open: openConds, resolved: resolvedConds },
+      selectedPartners: partnerRows.map((p) => ({
+        id: p.id,
+        name: p.name,
+        productFocus: p.productFocus,
+        minimumTicketSize: p.minimumTicketSize,
+        maximumTicketSize: p.maximumTicketSize,
+        contactEmail: p.contactEmail,
+        notes: p.notes,
+      })),
+      loanOfficerNotes: ctx.dossier.loanOfficerNotes,
+      loanOfficerDecision: ctx.dossier.loanOfficerDecision,
     });
 
     const [run] = await db
@@ -248,10 +348,19 @@ class SkillOrchestrationService {
       })
       .returning();
 
-    await db
-      .update(dossiersTable)
-      .set({ status: "memorandum_generated", updatedAt: new Date() })
-      .where(eq(dossiersTable.id, dossierId));
+    // Only advance to memorandum_generated when the dossier isn't already
+    // further along (e.g. partner-submitted) — re-generating the memo
+    // mid-flow must never downgrade the dossier status.
+    const advanceableStatuses = new Set([
+      "approved_for_partner_submission",
+      "memorandum_generated",
+    ]);
+    if (advanceableStatuses.has(ctx.dossier.status)) {
+      await db
+        .update(dossiersTable)
+        .set({ status: "memorandum_generated", updatedAt: new Date() })
+        .where(eq(dossiersTable.id, dossierId));
+    }
 
     return { runId: run.id, memorandum: result.data };
   }

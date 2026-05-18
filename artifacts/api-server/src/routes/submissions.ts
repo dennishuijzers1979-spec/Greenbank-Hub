@@ -7,6 +7,7 @@ import {
   dossiersTable,
   prospectProfilesTable,
   conditionsTable,
+  aiAnalysisRunsTable,
 } from "@workspace/db";
 import { and, ne } from "drizzle-orm";
 import {
@@ -129,6 +130,7 @@ router.post("/dossiers/:dossierId/submissions", requireAuth(["loan_officer", "ad
         ticketWarnings: string[];
         previousStatus: string;
         emailJobs: EmailJob[];
+        memorandumRunId: string;
       }
     | { ok: false; httpStatus: number; payload: { error: string; message?: string } };
 
@@ -146,6 +148,42 @@ router.post("/dossiers/:dossierId/submissions", requireAuth(["loan_officer", "ad
     if (!row) {
       return { ok: false, httpStatus: 404, payload: { error: "Dossier niet gevonden" } };
     }
+
+    // Block partner submission until a credit memorandum has been
+    // generated — partners must always receive the structured Dutch
+    // memorandum context, not a bare amount/purpose line. The memo
+    // also drives the package summary below.
+    const memoRuns = await tx
+      .select()
+      .from(aiAnalysisRunsTable)
+      .where(eq(aiAnalysisRunsTable.dossierId, params.data.dossierId))
+      .orderBy(desc(aiAnalysisRunsTable.startedAt));
+    const memoRun = memoRuns.find(
+      (r) => r.runType === "memorandum" && r.memorandum,
+    );
+    if (!memoRun) {
+      return {
+        ok: false,
+        httpStatus: 409,
+        payload: {
+          error: "Geen kredietmemorandum",
+          message:
+            "Genereer eerst een kredietmemorandum voordat je het dossier bij partners indient.",
+        },
+      };
+    }
+    const memo = memoRun.memorandum as {
+      sections?: Array<{ title: string; body: string }>;
+      evidenceGaps?: string[];
+      verdict?: string | null;
+    };
+    const execSection = (memo.sections ?? []).find((s) =>
+      s.title.toLowerCase().includes("samenvatting"),
+    );
+    const memoVerdict = memo.verdict ?? row.dossier.aiVerdict ?? null;
+    const memoEvidenceGaps = Array.isArray(memo.evidenceGaps)
+      ? memo.evidenceGaps
+      : [];
     // Defensive gate: never let a dossier with outstanding blocking
     // conditions reach partners — even if it somehow ended up in an
     // approved status. This mirrors checkRunAnalysisGate's rule.
@@ -185,9 +223,33 @@ router.post("/dossiers/:dossierId/submissions", requireAuth(["loan_officer", "ad
     }
 
     const requestedAmount = Number(row.dossier.requestedAmount ?? 0);
-    const packageSummaryBase = `Dossier ${row.companyName} — €${requestedAmount.toLocaleString(
-      "nl-NL",
-    )} (${row.dossier.financingPurpose ?? "doel onbekend"})`;
+    // Build a richer package summary that references the memorandum
+    // (executive section + verdict + open evidence gaps) on top of the
+    // bare amount/purpose line — partners receive context, not just
+    // numbers.
+    const openConds = await tx
+      .select()
+      .from(conditionsTable)
+      .where(
+        and(
+          eq(conditionsTable.dossierId, params.data.dossierId),
+          ne(conditionsTable.status, "resolved"),
+        ),
+      );
+    const summaryParts = [
+      `Memorandum: ${row.companyName} — €${requestedAmount.toLocaleString("nl-NL")} (${row.dossier.financingPurpose ?? "doel onbekend"})`,
+      memoVerdict ? `Verdict: ${memoVerdict}` : null,
+      execSection
+        ? `Samenvatting: ${execSection.body.replace(/\s+/g, " ").trim().slice(0, 240)}`
+        : null,
+      openConds.length > 0
+        ? `${openConds.length} openstaande voorwaarde(n)`
+        : "Geen openstaande voorwaarden",
+      memoEvidenceGaps.length > 0
+        ? `Evidence gaps: ${memoEvidenceGaps.length}`
+        : null,
+    ].filter((line): line is string => Boolean(line));
+    const packageSummaryBase = summaryParts.join(" • ");
 
     const inserts: ReturnType<typeof serializeSubmission>[] = [];
     const ticketWarnings: string[] = [];
@@ -240,6 +302,7 @@ router.post("/dossiers/:dossierId/submissions", requireAuth(["loan_officer", "ad
       ticketWarnings,
       previousStatus: row.dossier.status,
       emailJobs,
+      memorandumRunId: memoRun.id,
     };
   });
 
@@ -281,6 +344,7 @@ router.post("/dossiers/:dossierId/submissions", requireAuth(["loan_officer", "ad
       partnerIds: partners.map((p) => p.id),
       partnerNames: partners.map((p) => p.name),
       ticketRangeWarnings: txResult.ticketWarnings,
+      memorandumRunId: txResult.memorandumRunId,
       mockSend: true,
     },
   });

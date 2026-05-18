@@ -427,13 +427,29 @@ export default function DossierDetail() {
   };
 
   const handleGenerateMemo = () => {
-    memoMutation.mutate({ dossierId: id }, {
-      onSuccess: () => {
-        queryClient.invalidateQueries({ queryKey: getGetMemorandumQueryKey(id) });
-        queryClient.invalidateQueries({ queryKey: getGetDossierQueryKey(id) });
-        toast({ title: "Memorandum in de maak", description: "Het kredietmemorandum wordt gegenereerd." });
-      }
-    });
+    memoMutation.mutate(
+      { dossierId: id, data: { partnerIds: selectedPartners } },
+      {
+        onSuccess: () => {
+          queryClient.invalidateQueries({ queryKey: getGetMemorandumQueryKey(id) });
+          queryClient.invalidateQueries({ queryKey: getGetDossierQueryKey(id) });
+          toast({
+            title: "Memorandum gegenereerd",
+            description: selectedPartners.length > 0
+              ? `Kredietmemorandum + pakket voorbeeld voor ${selectedPartners.length} partner(s).`
+              : "Het kredietmemorandum is bijgewerkt.",
+          });
+        },
+        onError: (err: unknown) => {
+          const { title, description } = extractApiError(
+            err,
+            "Memorandum mislukt",
+            "Probeer het later opnieuw.",
+          );
+          toast({ title, description, variant: "destructive" });
+        },
+      },
+    );
   };
 
   const SUBMITTABLE_STATUSES = new Set([
@@ -1407,39 +1423,101 @@ export default function DossierDetail() {
         </TabsContent>
 
         <TabsContent value="memo">
-          <Card>
+          <Card data-testid="memo-card">
             <CardHeader className="flex flex-row items-center justify-between pb-2">
               <div>
                 <CardTitle>Kredietmemorandum</CardTitle>
-                <CardDescription>Gestandaardiseerd format voor partner financiers.</CardDescription>
+                <CardDescription>14-secties Dutch format voor partner financiers — alleen interne data.</CardDescription>
               </div>
-              {!memo && (
-                <Button onClick={handleGenerateMemo} disabled={memoMutation.isPending}>
-                  {memoMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <FileText className="w-4 h-4 mr-2" />}
-                  Genereer Memorandum
-                </Button>
-              )}
+              <Button
+                onClick={handleGenerateMemo}
+                disabled={memoMutation.isPending}
+                data-testid="button-generate-memo"
+                variant={memo ? "outline" : "default"}
+              >
+                {memoMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <FileText className="w-4 h-4 mr-2" />}
+                {memo ? "Genereer opnieuw" : "Genereer memorandum"}
+              </Button>
             </CardHeader>
             <CardContent>
               {memo ? (
-                <div className="space-y-6 pt-4">
+                <div className="space-y-6 pt-2">
+                  {memo.stale && (
+                    <Alert variant="destructive" data-testid="memo-stale-banner" className="border-amber-300 bg-amber-50 text-amber-900">
+                      <AlertTriangle className="w-4 h-4" />
+                      <AlertTitle>Memorandum is verouderd</AlertTitle>
+                      <AlertDescription>
+                        {memo.staleReason ?? "De onderliggende dossierdata is bijgewerkt sinds de laatste generatie."}
+                        {" "}Klik op "Genereer opnieuw" om bij te werken.
+                      </AlertDescription>
+                    </Alert>
+                  )}
+
+                  {memo.verdict && (
+                    <div className="flex flex-wrap items-center gap-2" data-testid="memo-verdict">
+                      <Badge variant="outline" className="text-xs uppercase">Verdict: {memo.verdict}</Badge>
+                      <span className="text-xs text-muted-foreground">
+                        Gegenereerd: {memo.generatedAt ? format(new Date(memo.generatedAt), "d MMM yyyy HH:mm", { locale: nl }) : "—"}
+                      </span>
+                    </div>
+                  )}
+
+                  {memo.evidenceGaps && memo.evidenceGaps.length > 0 && (
+                    <Alert data-testid="memo-evidence-gaps" className="border-amber-300 bg-amber-50 text-amber-900">
+                      <AlertCircle className="w-4 h-4" />
+                      <AlertTitle>Ontbrekende bewijsstukken ({memo.evidenceGaps.length})</AlertTitle>
+                      <AlertDescription>
+                        <ul className="list-disc pl-5 mt-1 space-y-0.5 text-xs">
+                          {memo.evidenceGaps.map((g, i) => (
+                            <li key={i} data-testid={`evidence-gap-${i}`}>{g}</li>
+                          ))}
+                        </ul>
+                      </AlertDescription>
+                    </Alert>
+                  )}
+
                   {memo.sections.map((section, idx) => (
-                    <div key={idx} className="space-y-2">
+                    <div key={idx} className="space-y-2" data-testid={`memo-section-${idx}`}>
                       <h3 className="text-lg font-semibold border-b pb-1">{section.title}</h3>
                       <div className="text-sm whitespace-pre-wrap leading-relaxed text-muted-foreground font-mono bg-muted/20 p-4 rounded-md">
                         {section.body}
                       </div>
                     </div>
                   ))}
+
+                  {memo.partnerPackages && memo.partnerPackages.length > 0 && (
+                    <div className="space-y-3" data-testid="memo-partner-packages">
+                      <h3 className="text-lg font-semibold border-b pb-1">Partner-pakketten voorbeeld</h3>
+                      {memo.partnerPackages.map((pkg, idx) => (
+                        <div key={pkg.partnerId} className="border rounded-md p-3 space-y-1" data-testid={`partner-package-${idx}`}>
+                          <div className="flex items-center gap-2">
+                            <Building2 className="w-4 h-4 text-muted-foreground" />
+                            <span className="text-sm font-medium">{pkg.partnerName}</span>
+                            {pkg.fitsTicketRange === false && (
+                              <Badge variant="outline" className="text-[10px] border-amber-300 text-amber-700">buiten ticket-range</Badge>
+                            )}
+                          </div>
+                          <p className="text-xs text-muted-foreground">
+                            Focus: {pkg.productFocus}{pkg.ticketRange ? ` • Ticket: ${pkg.ticketRange}` : ""}
+                          </p>
+                          <p className="text-xs text-muted-foreground whitespace-pre-wrap">{pkg.packageSummary}</p>
+                          {pkg.partnerNotes && (
+                            <p className="text-xs text-muted-foreground italic">{pkg.partnerNotes}</p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               ) : (
-                <div className="py-12 flex flex-col items-center text-center">
+                <div className="py-12 flex flex-col items-center text-center" data-testid="memo-empty">
                   <div className="w-16 h-16 bg-muted rounded-full flex items-center justify-center mb-4">
                     <FileText className="w-8 h-8 text-muted-foreground" />
                   </div>
                   <h3 className="text-lg font-medium mb-1">Nog geen memorandum</h3>
                   <p className="text-muted-foreground text-sm max-w-sm mb-4">
-                    Genereer een gestandaardiseerd kredietmemorandum gebaseerd op de AI analyse en uw beoordeling.
+                    Genereer een gestandaardiseerd kredietmemorandum gebaseerd op de AI analyse, dual-view en uw beoordeling.
+                    Partner-aanbieding is geblokkeerd zonder memorandum.
                   </p>
                 </div>
               )}
@@ -1544,6 +1622,17 @@ export default function DossierDetail() {
                   </Alert>
                 )}
 
+                {!memo && (
+                  <Alert variant="destructive" data-testid="partners-memo-required">
+                    <AlertCircle className="w-4 h-4" />
+                    <AlertTitle>Memorandum vereist</AlertTitle>
+                    <AlertDescription>
+                      Voordat het dossier bij partners ingediend kan worden moet eerst een kredietmemorandum
+                      worden gegenereerd in het tabblad <strong>Memorandum</strong>.
+                    </AlertDescription>
+                  </Alert>
+                )}
+
                 <div className="flex gap-2 pt-2">
                   <Button
                     variant="outline"
@@ -1554,7 +1643,7 @@ export default function DossierDetail() {
                   </Button>
                   <Button
                     className="flex-1"
-                    disabled={selectedPartners.length === 0 || submitPartnerMutation.isPending}
+                    disabled={selectedPartners.length === 0 || submitPartnerMutation.isPending || !memo}
                     onClick={openPackagePreview}
                     data-testid="button-prepare-package"
                   >

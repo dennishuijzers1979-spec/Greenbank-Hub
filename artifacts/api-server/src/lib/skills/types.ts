@@ -112,10 +112,39 @@ export type AnalysisOutput = {
   errors: string[];
 };
 
+export type MemorandumPartnerPackage = {
+  partnerId: string;
+  partnerName: string;
+  productFocus: string;
+  ticketRange: string | null;
+  fitsTicketRange: boolean;
+  partnerNotes: string | null;
+  packageSummary: string;
+};
+
+/**
+ * Structured Dutch credit memorandum / partner package payload, built
+ * by `MoneycareKredietmemorandumAdapter.buildMemorandum`.
+ *
+ * - `sections` is the readable financier-facing memo (one Dutch
+ *   section per spec heading; "Niet beschikbaar" when data missing).
+ * - `evidenceGaps` lists every data source that was missing or empty
+ *   so the loan officer can address gaps before sending. The adapter
+ *   never invents facts — gaps are surfaced explicitly.
+ * - `partnerPackages` is the per-partner package preview, populated
+ *   when the loan officer passes `selectedPartners`. Empty otherwise.
+ * - `verdict` mirrors the GeenbankKredietworkflow verdict the memo
+ *   was built from (kansrijk / voorwaardelijk / afwijzen / null).
+ * - `usedMockMode` propagates from the adapter runtime so the UI can
+ *   mark the memo as mock when the live AI provider was not used.
+ */
 export type Memorandum = {
   sections: Array<{ title: string; body: string }>;
   attachments: string[];
   partnerNotes: string | null;
+  partnerPackages: MemorandumPartnerPackage[];
+  evidenceGaps: string[];
+  verdict: string | null;
   usedMockMode: boolean;
 };
 

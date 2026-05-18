@@ -323,14 +323,28 @@ router.post(
       res.status(404).json({ error: "Dossier niet gevonden" });
       return;
     }
-    const { memorandum } = await skillOrchestrationService.runMemorandum(
+    // Optional partner pre-selection. Validated loosely here — the
+    // adapter does its own existence/active-status filtering when
+    // building the per-partner package preview.
+    const rawPartnerIds = (req.body && (req.body as Record<string, unknown>).partnerIds) ?? [];
+    const partnerIds = Array.isArray(rawPartnerIds)
+      ? rawPartnerIds.filter((v): v is string => typeof v === "string")
+      : [];
+    const { runId, memorandum } = await skillOrchestrationService.runMemorandum(
       params.data.dossierId,
+      partnerIds,
     );
     await logActivity({
       dossierId: params.data.dossierId,
       actor: req.user!,
       action: "memorandum_generated",
       description: "Kredietmemorandum gegenereerd.",
+      metadata: {
+        memorandumRunId: runId,
+        partnerIds,
+        evidenceGaps: memorandum.evidenceGaps.length,
+        sections: memorandum.sections.length,
+      },
     });
     res.json({
       dossierId: params.data.dossierId,
@@ -339,6 +353,11 @@ router.post(
       sections: memorandum.sections,
       attachments: memorandum.attachments,
       partnerNotes: memorandum.partnerNotes,
+      partnerPackages: memorandum.partnerPackages,
+      evidenceGaps: memorandum.evidenceGaps,
+      verdict: memorandum.verdict,
+      stale: false,
+      staleReason: null,
     });
   },
 );
@@ -366,6 +385,16 @@ router.get(
       res.status(404).json({ error: "Geen memorandum gegenereerd" });
       return;
     }
+    // Staleness: a more recent prevalidation / full_analysis run means
+    // the stored memorandum no longer reflects the latest AI scoring.
+    const latestAnalysis = runs.find((r) =>
+      ["prevalidation", "full_analysis"].includes(r.runType),
+    );
+    const memoTs = (memoRun.completedAt ?? memoRun.startedAt)?.getTime() ?? 0;
+    const anaTs =
+      (latestAnalysis?.completedAt ?? latestAnalysis?.startedAt)?.getTime() ?? 0;
+    const stale = Boolean(latestAnalysis && anaTs > memoTs);
+
     const m = memoRun.memorandum as Record<string, unknown>;
     res.json({
       dossierId: params.data.dossierId,
@@ -374,6 +403,13 @@ router.get(
       sections: m.sections ?? [],
       attachments: m.attachments ?? [],
       partnerNotes: m.partnerNotes ?? null,
+      partnerPackages: m.partnerPackages ?? [],
+      evidenceGaps: m.evidenceGaps ?? [],
+      verdict: m.verdict ?? null,
+      stale,
+      staleReason: stale
+        ? "Er is een nieuwere AI-analyse uitgevoerd na dit memorandum. Genereer opnieuw om de laatste cijfers te gebruiken."
+        : null,
     });
   },
 );

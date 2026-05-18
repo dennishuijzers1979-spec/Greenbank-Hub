@@ -413,6 +413,11 @@ paths:
           name: dossierId
           required: true
           schema: { type: string }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MemorandumRequest" }
       responses:
         "200":
           description: Memorandum
@@ -1209,7 +1214,48 @@ components:
           type: array
           items: { type: string }
         partnerNotes: { type: string, nullable: true }
-      required: [dossierId, generatedAt, usedMockMode, sections, attachments]
+        partnerPackages:
+          type: array
+          items: { $ref: "#/components/schemas/MemorandumPartnerPackage" }
+        evidenceGaps:
+          type: array
+          items: { type: string }
+        verdict: { type: string, nullable: true }
+        stale: { type: boolean }
+        staleReason: { type: string, nullable: true }
+      required:
+        - dossierId
+        - generatedAt
+        - usedMockMode
+        - sections
+        - attachments
+        - partnerPackages
+        - evidenceGaps
+        - stale
+
+    MemorandumRequest:
+      type: object
+      properties:
+        partnerIds:
+          type: array
+          items: { type: string }
+
+    MemorandumPartnerPackage:
+      type: object
+      properties:
+        partnerId: { type: string }
+        partnerName: { type: string }
+        productFocus: { type: string }
+        ticketRange: { type: string, nullable: true }
+        fitsTicketRange: { type: boolean }
+        partnerNotes: { type: string, nullable: true }
+        packageSummary: { type: string }
+      required:
+        - partnerId
+        - partnerName
+        - productFocus
+        - fitsTicketRange
+        - packageSummary
 
     MemorandumSection:
       type: object

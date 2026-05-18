@@ -28,6 +28,7 @@ import {
   activityLogsTable,
   partnerFinanciersTable,
   partnerSubmissionsTable,
+  aiAnalysisRunsTable,
 } from "@workspace/db";
 
 import app from "../app";
@@ -159,6 +160,30 @@ async function createPartner(opts?: {
   return p.id;
 }
 
+/**
+ * Seed a memorandum run so a downstream submission passes the
+ * memorandum gate. Submissions now require an existing
+ * `memorandum`-type AI analysis run.
+ */
+async function seedMemorandum(dossierId: string): Promise<void> {
+  await db.insert(aiAnalysisRunsTable).values({
+    dossierId,
+    runType: "memorandum",
+    status: "completed",
+    completedAt: new Date(),
+    memorandum: {
+      sections: [{ title: "1. Samenvatting", body: "Mock samenvatting." }],
+      attachments: [],
+      partnerNotes: null,
+      partnerPackages: [],
+      evidenceGaps: [],
+      verdict: "go",
+      usedMockMode: true,
+    },
+    usedMockMode: true,
+  });
+}
+
 interface ApiResponse {
   status: number;
   json: unknown;
@@ -201,6 +226,7 @@ test("loan officer can submit an approved dossier to active partners (mock-send)
   });
   const p1 = await createPartner({ active: true, min: 50_000, max: 250_000 });
   const p2 = await createPartner({ active: true });
+  await seedMemorandum(ctx.dossierId);
 
   const r = await apiPost(
     `/dossiers/${ctx.dossierId}/submissions`,
@@ -280,6 +306,7 @@ test("re-submission on already-submitted dossier returns 409", async () => {
   const officer = await createUser("loan_officer");
   const ctx = await createProspectWithDossier({ status: "submitted_to_partners" });
   const p1 = await createPartner({ active: true });
+  await seedMemorandum(ctx.dossierId);
   const r = await apiPost(
     `/dossiers/${ctx.dossierId}/submissions`,
     officer.sessionToken,
@@ -365,6 +392,7 @@ test("admin can submit like a loan officer", async () => {
   const admin = await createUser("admin");
   const ctx = await createProspectWithDossier({ status: "approved_for_partner_submission" });
   const p1 = await createPartner({ active: true });
+  await seedMemorandum(ctx.dossierId);
   const r = await apiPost(
     `/dossiers/${ctx.dossierId}/submissions`,
     admin.sessionToken,
@@ -381,6 +409,7 @@ test("submission persists when SendGrid key is missing (mock email path)", async
     requestedAmount: 75_000,
   });
   const p1 = await createPartner({ active: true });
+  await seedMemorandum(ctx.dossierId);
   const r = await apiPost(
     `/dossiers/${ctx.dossierId}/submissions`,
     officer.sessionToken,
@@ -403,6 +432,7 @@ test("concurrent submissions on the same dossier do not create duplicate rows", 
   });
   const p1 = await createPartner({ active: true });
   const p2 = await createPartner({ active: true });
+  await seedMemorandum(ctx.dossierId);
   // Fire two requests in parallel — one must win the row-lock and succeed,
   // the other must observe `submitted_to_partners` and return 409.
   const [a, b] = await Promise.all([
@@ -426,6 +456,7 @@ test("ticket-range warning is recorded in activity metadata when amount falls ou
     requestedAmount: 1_000_000,
   });
   const p1 = await createPartner({ active: true, min: 10_000, max: 100_000 });
+  await seedMemorandum(ctx.dossierId);
   const r = await apiPost(
     `/dossiers/${ctx.dossierId}/submissions`,
     officer.sessionToken,
