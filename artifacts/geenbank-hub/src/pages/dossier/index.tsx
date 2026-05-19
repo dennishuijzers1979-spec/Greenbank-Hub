@@ -20,8 +20,9 @@ import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { AlertCircle, FileText, Upload, BrainCircuit, CheckCircle2, ArrowRight, Loader2, PlayCircle, Sparkles, Send, Hourglass, Paperclip } from "lucide-react";
+import { AlertCircle, FileText, Upload, BrainCircuit, CheckCircle2, ArrowRight, Loader2, PlayCircle, Sparkles, Send, Hourglass, Paperclip, Rocket, ShieldCheck, MessageSquareText, Target } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { isIntakeRequiredComplete, intakeRequiredMissing } from "@/lib/dossier-utils";
 
 /**
  * Extracts the typed structured 409 payload (`GateBlockedError`) from a
@@ -141,7 +142,14 @@ export default function DossierHub() {
     );
   }
 
-  const stepIndex = getCurrentStepIndex(dossier.status);
+  const stepIndex = getCurrentStepIndex(dossier.status, {
+    companyName: dossier.prospect?.companyName,
+    financingPurpose: dossier.financingPurpose,
+    requestedAmount: dossier.requestedAmount,
+    annualRevenue: dossier.annualRevenue,
+    annualCost: dossier.annualCost,
+    annualProfit: dossier.annualProfit,
+  });
   const canSubmit = dossier.status === "entrepreneur_report_ready";
   const docCount = docs?.length ?? 0;
   const blockingCount = conditions?.filter(c => c.type === 'blocking' && c.status === 'open').length ?? 0;
@@ -192,14 +200,50 @@ export default function DossierHub() {
     });
   };
 
+  // Required-fields readiness — drives the next-best-action and the
+  // document handoff banner. "phone or email available" per spec, and
+  // every logged-in prospect has an email by construction, so a
+  // placeholder satisfies the OR branch and we only check phone.
+  const intakeReady = isIntakeRequiredComplete({
+    companyName: dossier.prospect?.companyName,
+    contactName: dossier.prospect?.contactName,
+    phone: dossier.prospect?.phone,
+    email: "logged-in",
+    financingPurpose: dossier.financingPurpose,
+    requestedAmount: dossier.requestedAmount,
+    companyDescription: dossier.companyDescription,
+  });
+  const missingForIntake = intakeRequiredMissing({
+    companyName: dossier.prospect?.companyName,
+    contactName: dossier.prospect?.contactName,
+    phone: dossier.prospect?.phone,
+    email: "logged-in",
+    financingPurpose: dossier.financingPurpose,
+    requestedAmount: dossier.requestedAmount,
+    companyDescription: dossier.companyDescription,
+  });
+  // "Newly created" — the welcome state. As soon as required intake
+  // fields are in AND documents exist, we drop the welcome panel.
+  const isFreshDossier =
+    !intakeReady ||
+    (dossier.intakeCompletionPercent < 100 && docCount === 0);
+
   return (
-    <div className="p-6 md:p-10 max-w-4xl mx-auto space-y-8">
+    <div className="p-4 sm:p-6 md:p-10 max-w-5xl mx-auto space-y-8">
       <div className="flex flex-col md:flex-row justify-between items-start md:items-end gap-4">
         <div>
-          <h1 className="text-3xl font-serif font-bold tracking-tight mb-2">Mijn Dossier</h1>
-          <p className="text-muted-foreground">Voltooi de onderstaande stappen om uw financieringsaanvraag in te dienen.</p>
+          <h1 className="text-3xl md:text-4xl font-serif font-bold tracking-tight mb-1">
+            Mijn dossier
+          </h1>
+          <p className="text-muted-foreground">
+            Je financieringscockpit. Hier bouw je het verhaal dat banken en
+            partnerfinanciers serieus moeten nemen.
+          </p>
         </div>
-        <div className="px-4 py-2 bg-secondary rounded-lg border text-sm font-medium">
+        <div
+          className="px-4 py-2 bg-secondary rounded-lg border text-sm font-medium"
+          data-testid="text-current-status"
+        >
           Status: {getStatusLabel(dossier.status)}
         </div>
       </div>
@@ -209,6 +253,154 @@ export default function DossierHub() {
           <ProgressSteps steps={PROSPECT_PIPELINE_STEPS} currentStepIndex={stepIndex} />
         </CardContent>
       </Card>
+
+      {/* Welcome / next-best-action for newly created or still-incomplete prospects */}
+      {isFreshDossier && dossier.status !== "additional_info_requested" && (
+        <Card
+          className="border-primary/30 bg-primary/[0.04] shadow-sm"
+          data-testid="card-welcome"
+        >
+          <CardContent className="p-6 md:p-8 space-y-5">
+            <div className="flex items-start gap-4">
+              <div className="p-3 rounded-full bg-primary/10 text-primary shrink-0">
+                <Rocket className="w-6 h-6" />
+              </div>
+              <div className="space-y-2">
+                <h2 className="text-2xl font-serif font-semibold tracking-tight">
+                  Welkom bij Geenbank Hub
+                </h2>
+                <p className="text-muted-foreground">
+                  We helpen je een sterker dossier bouwen dan een gewone
+                  bankaanvraag. Vul de korte intake in, lever je documenten
+                  aan, en wij vertalen jouw verhaal naar wat financiers
+                  nodig hebben om snel ja te kunnen zeggen.
+                </p>
+              </div>
+            </div>
+
+            {missingForIntake.length > 0 && (
+              <div className="rounded-lg border bg-card p-4">
+                <p className="text-sm font-medium mb-2">
+                  Wat we nog nodig hebben om je intake te complete­ren:
+                </p>
+                <ul
+                  className="text-sm text-muted-foreground grid sm:grid-cols-2 gap-x-4 gap-y-1"
+                  data-testid="list-intake-missing"
+                >
+                  {missingForIntake.map((m) => (
+                    <li key={m} className="flex items-start gap-1.5">
+                      <span className="text-primary mt-0.5">•</span> {m}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            <div className="flex flex-col sm:flex-row gap-2 pt-1">
+              <Button
+                size="lg"
+                onClick={() => setLocation("/dossier/intake")}
+                data-testid="button-strengthen-application"
+              >
+                <Sparkles className="w-4 h-4 mr-2" />
+                {intakeReady ? "Intake verfijnen" : "Aanvraag versterken"}
+              </Button>
+              <Button
+                size="lg"
+                variant="outline"
+                onClick={() => setLocation("/dossier/documenten")}
+                data-testid="button-prepare-documents"
+              >
+                <Upload className="w-4 h-4 mr-2" /> Documenten voorbereiden
+              </Button>
+            </div>
+
+            <div className="border-t pt-4 text-sm text-muted-foreground">
+              <span className="font-medium text-foreground">Wat hierna gebeurt:</span>{" "}
+              zodra je intake en documenten compleet zijn, draait onze AI
+              een pre-validatie. Daarna krijg je een rapport met sterke
+              punten en aandachtspunten — en pas dán kun je het dossier
+              indienen bij Geenbank voor menselijke beoordeling.
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Document handoff — surfaces once intake-required fields are in. */}
+      {intakeReady && docCount === 0 && dossier.status !== "additional_info_requested" && (
+        <Card
+          className="border-green-300 bg-green-50/60 dark:border-green-800 dark:bg-green-950/20"
+          data-testid="card-document-handoff"
+        >
+          <CardContent className="p-6 flex flex-col sm:flex-row items-start sm:items-center gap-4">
+            <div className="p-3 rounded-full bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300 shrink-0">
+              <CheckCircle2 className="w-6 h-6" />
+            </div>
+            <div className="flex-1 space-y-1">
+              <h3 className="text-lg font-medium text-green-900 dark:text-green-200">
+                Intake is binnen — nu bouwen we bewijs onder je aanvraag
+              </h3>
+              <p className="text-sm text-green-900/80 dark:text-green-200/80">
+                Jaarrekening, bankafschriften, KVK-uittreksel en een
+                identiteitsbewijs. Dat is wat financiers nodig hebben om
+                je verhaal te kunnen wegen. Het kost je 10–15 minuten.
+              </p>
+            </div>
+            <Button
+              onClick={() => setLocation("/dossier/documenten")}
+              data-testid="button-handoff-documents"
+            >
+              <Upload className="w-4 h-4 mr-2" /> Naar documenten
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Motivating next-best-action panels */}
+      {dossier.status !== "additional_info_requested" &&
+        !["entrepreneur_report_ready", "submitted_to_geenbank", "loan_officer_review", "approved_for_partner_submission", "rejected_by_loan_officer", "memorandum_generated", "submitted_to_partners", "partner_response_received", "closed"].includes(dossier.status) && (
+          <div className="grid gap-4 md:grid-cols-3" data-testid="panels-motivation">
+            <Card>
+              <CardContent className="p-5 space-y-2">
+                <div className="flex items-center gap-2 text-primary">
+                  <Target className="w-5 h-5" />
+                  <h4 className="font-medium">Sterker dossier</h4>
+                </div>
+                <p className="text-sm text-muted-foreground">
+                  Hoe concreter je doel en cijfers, hoe sterker wij kunnen
+                  onderbouwen waarom je bedrijf financierbaar is.
+                </p>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="p-5 space-y-2">
+                <div className="flex items-center gap-2 text-primary">
+                  <MessageSquareText className="w-5 h-5" />
+                  <h4 className="font-medium">Wat financiers willen begrijpen</h4>
+                </div>
+                <p className="text-sm text-muted-foreground">
+                  Wat doe je, voor wie, en waarom werkt het? Hoe scherper
+                  dat verhaal, hoe sneller een 'ja' aan tafel.
+                </p>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="p-5 space-y-2">
+                <div className="flex items-center gap-2 text-primary">
+                  <ShieldCheck className="w-5 h-5" />
+                  <h4 className="font-medium">Nog nodig voor beoordeling</h4>
+                </div>
+                <p className="text-sm text-muted-foreground">
+                  {intakeReady && docCount > 0
+                    ? "Je bent op koers. De AI doet de eerste check zodra alle documenten geldig zijn."
+                    : missingForIntake.length > 0
+                      ? `Nog ${missingForIntake.length} intake-veld(en) en je documenten.`
+                      : "Je documenten — dat is de laatste stap voor de AI-check."}
+                </p>
+              </CardContent>
+            </Card>
+          </div>
+        )}
 
       {dossier.status === "additional_info_requested" && (
         <AdditionalInfoSection

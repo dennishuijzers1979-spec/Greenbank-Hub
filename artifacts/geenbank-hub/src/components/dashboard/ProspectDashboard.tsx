@@ -35,7 +35,14 @@ export default function ProspectDashboard() {
     );
   }
 
-  const stepIndex = getCurrentStepIndex(dossier.status);
+  const stepIndex = getCurrentStepIndex(dossier.status, {
+    companyName: dossier.prospect?.companyName,
+    financingPurpose: dossier.financingPurpose,
+    requestedAmount: dossier.requestedAmount,
+    annualRevenue: dossier.annualRevenue,
+    annualCost: dossier.annualCost,
+    annualProfit: dossier.annualProfit,
+  });
   
   return (
     <div className="p-6 md:p-10 max-w-5xl mx-auto space-y-8">
