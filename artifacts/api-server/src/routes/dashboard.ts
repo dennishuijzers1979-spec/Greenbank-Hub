@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { sql, desc, eq, inArray } from "drizzle-orm";
+import { sql, desc, eq, inArray, or } from "drizzle-orm";
 import {
   db,
   dossiersTable,
@@ -9,18 +9,27 @@ import {
 } from "@workspace/db";
 import { requireAuth } from "../lib/auth";
 import { stageLabel, bucketForDossier } from "../lib/serializers";
-import { OFFICER_VISIBLE_STATUSES } from "../lib/dossier-access";
+import {
+  OFFICER_VISIBLE_STATUSES,
+  OFFICER_VISIBLE_INTAKE_SOURCES,
+} from "../lib/dossier-access";
 
 const router: IRouter = Router();
 
 const VISIBLE_STATUSES = [...OFFICER_VISIBLE_STATUSES];
+const VISIBLE_INTAKE_SOURCES = [...OFFICER_VISIBLE_INTAKE_SOURCES];
 
 router.get("/dashboard/loan-officer", requireAuth(["loan_officer", "admin"]), async (_req, res): Promise<void> => {
   const all = await db
     .select()
     .from(dossiersTable)
     .innerJoin(prospectProfilesTable, eq(prospectProfilesTable.id, dossiersTable.prospectId))
-    .where(inArray(dossiersTable.status, VISIBLE_STATUSES))
+    .where(
+      or(
+        inArray(dossiersTable.status, VISIBLE_STATUSES),
+        inArray(prospectProfilesTable.source, VISIBLE_INTAKE_SOURCES),
+      ),
+    )
     .orderBy(desc(dossiersTable.updatedAt));
 
   const totals = {
@@ -76,7 +85,13 @@ router.get("/dashboard/loan-officer", requireAuth(["loan_officer", "admin"]), as
       c: sql<number>`count(*)::int`,
     })
     .from(dossiersTable)
-    .where(inArray(dossiersTable.status, VISIBLE_STATUSES))
+    .innerJoin(prospectProfilesTable, eq(prospectProfilesTable.id, dossiersTable.prospectId))
+    .where(
+      or(
+        inArray(dossiersTable.status, VISIBLE_STATUSES),
+        inArray(prospectProfilesTable.source, VISIBLE_INTAKE_SOURCES),
+      ),
+    )
     .groupBy(dossiersTable.status);
   const pipeline = stages.map((s) => ({
     stage: s.stage,

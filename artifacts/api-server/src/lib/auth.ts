@@ -82,6 +82,12 @@ export function requireAuth(roles?: AuthUserRow["role"][]) {
       res.status(401).json({ error: "Niet geautoriseerd" });
       return;
     }
+    if (user.status === "disabled") {
+      // Drop the cookie so the disabled session cannot keep retrying.
+      clearSessionCookie(res);
+      res.status(401).json({ error: "Account is gedeactiveerd" });
+      return;
+    }
     if (roles && !roles.includes(user.role)) {
       res.status(403).json({ error: "Onvoldoende rechten" });
       return;

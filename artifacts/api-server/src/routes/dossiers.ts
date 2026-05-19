@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { and, eq, desc, count, ne } from "drizzle-orm";
+import { and, eq, desc, count, ne, or } from "drizzle-orm";
 import {
   db,
   dossiersTable,
@@ -12,7 +12,8 @@ import { inArray } from "drizzle-orm";
 import { checkRunAnalysisGate } from "../lib/skill-orchestration";
 import {
   OFFICER_VISIBLE_STATUSES,
-  isOfficerVisibleStatus,
+  OFFICER_VISIBLE_INTAKE_SOURCES,
+  isOfficerVisibleRow,
   officerCanAccessDossier,
 } from "../lib/dossier-access";
 import {
@@ -187,13 +188,19 @@ router.get("/dossiers", requireAuth(["loan_officer", "admin"]), async (req, res)
     res.status(400).json({ error: params.error.message });
     return;
   }
-  // Loan officers only see dossiers that have passed the prospect-side gates
-  // and entered the Geenbank workflow.
+  // Loan officers see dossiers that have entered the Geenbank workflow OR
+  // were manually onboarded by an officer (visible during intake so the
+  // creator can track follow-up).
   const rows = await db
     .select()
     .from(dossiersTable)
     .innerJoin(prospectProfilesTable, eq(prospectProfilesTable.id, dossiersTable.prospectId))
-    .where(inArray(dossiersTable.status, [...OFFICER_VISIBLE_STATUSES]))
+    .where(
+      or(
+        inArray(dossiersTable.status, [...OFFICER_VISIBLE_STATUSES]),
+        inArray(prospectProfilesTable.source, [...OFFICER_VISIBLE_INTAKE_SOURCES]),
+      ),
+    )
     .orderBy(desc(dossiersTable.updatedAt));
   const items = rows.map((r) => serializeDossierListItem(r.dossiers, r.prospect_profiles));
   const bucket = params.data.bucket;
@@ -214,7 +221,7 @@ router.get("/dossiers/:dossierId", requireAuth(["loan_officer", "admin"]), async
     .innerJoin(prospectProfilesTable, eq(prospectProfilesTable.id, dossiersTable.prospectId))
     .where(eq(dossiersTable.id, params.data.dossierId))
     .limit(1);
-  if (!row || !isOfficerVisibleStatus(row.dossiers.status)) {
+  if (!row || !isOfficerVisibleRow(row.dossiers.status, row.prospect_profiles.source)) {
     res.status(404).json({ error: "Dossier niet gevonden" });
     return;
   }

@@ -37,6 +37,8 @@ import {
 import {
   OFFICER_VISIBLE_STATUSES,
   isOfficerVisibleStatus,
+  isOfficerVisibleRow,
+  isOfficerVisibleSource,
   officerCanAccessDossier,
 } from "../lib/dossier-access";
 
@@ -151,6 +153,7 @@ async function createUser(role: Role): Promise<{
 
 async function createProspectWithDossier(opts?: {
   status?: string;
+  source?: string | null;
 }): Promise<{
   userId: string;
   prospectId: string;
@@ -164,6 +167,7 @@ async function createProspectWithDossier(opts?: {
       userId,
       companyName: `Test BV ${randomUUID().slice(0, 8)}`,
       contactName: "Test Persoon",
+      source: opts?.source ?? null,
     })
     .returning();
   const [dossier] = await db
@@ -512,6 +516,64 @@ test("officerCanAccessDossier mirrors OFFICER_VISIBLE_STATUSES", async () => {
     assert.equal(isOfficerVisibleStatus(s), true);
   }
   assert.equal(isOfficerVisibleStatus("intake_in_progress"), false);
+});
+
+test("manual-pilot prospects stay visible to officers throughout intake", async () => {
+  // Source 'manual_pilot' means the officer created the prospect — they
+  // need to be able to track it from intake_in_progress onwards.
+  const manualIntake = await createProspectWithDossier({
+    status: "intake_in_progress",
+    source: "manual_pilot",
+  });
+  const pipedriveIntake = await createProspectWithDossier({
+    status: "intake_in_progress",
+    source: "pipedrive",
+  });
+  const orphanIntake = await createProspectWithDossier({
+    status: "intake_in_progress",
+    source: null,
+  });
+
+  // Helper predicates
+  assert.equal(isOfficerVisibleSource("manual_pilot"), true);
+  assert.equal(isOfficerVisibleSource("pipedrive"), false);
+  assert.equal(isOfficerVisibleSource(null), false);
+  assert.equal(isOfficerVisibleSource(undefined), false);
+  assert.equal(isOfficerVisibleRow("intake_in_progress", "manual_pilot"), true);
+  assert.equal(isOfficerVisibleRow("intake_in_progress", "pipedrive"), false);
+  assert.equal(isOfficerVisibleRow("intake_in_progress", null), false);
+  // Status-based visibility still wins regardless of source.
+  assert.equal(isOfficerVisibleRow("submitted_to_geenbank", "pipedrive"), true);
+
+  // DB-level access check
+  assert.equal(await officerCanAccessDossier(manualIntake.dossierId), true);
+  assert.equal(await officerCanAccessDossier(pipedriveIntake.dossierId), false);
+  assert.equal(await officerCanAccessDossier(orphanIntake.dossierId), false);
+
+  // /dossiers list and /dossiers/:id surface manual_pilot intake dossiers
+  const officer = await createUser("loan_officer");
+  const listRes = await apiGet("/dossiers", officer.sessionToken);
+  assert.equal(listRes.status, 200);
+  const ids = (listRes.json as ReadonlyArray<{ id: string }>).map((d) => d.id);
+  assert.ok(
+    ids.includes(manualIntake.dossierId),
+    "manual_pilot intake dossier should be visible to officer",
+  );
+  assert.ok(
+    !ids.includes(pipedriveIntake.dossierId),
+    "pipedrive intake dossier should remain hidden",
+  );
+
+  const detailManual = await apiGet(
+    `/dossiers/${manualIntake.dossierId}`,
+    officer.sessionToken,
+  );
+  assert.equal(detailManual.status, 200);
+  const detailPipedrive = await apiGet(
+    `/dossiers/${pipedriveIntake.dossierId}`,
+    officer.sessionToken,
+  );
+  assert.equal(detailPipedrive.status, 404);
 });
 
 // ---------------------------------------------------------------------------

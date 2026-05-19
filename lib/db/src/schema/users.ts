@@ -19,6 +19,10 @@ export const usersTable = pgTable("users", {
   firstLoginCompleted: boolean("first_login_completed")
     .notNull()
     .default(false),
+  status: text("status", { enum: ["active", "disabled"] })
+    .notNull()
+    .default("active"),
+  passwordRotatedAt: timestamp("password_rotated_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),

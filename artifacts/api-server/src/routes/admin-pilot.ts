@@ -32,6 +32,26 @@ router.get(
       partner: 0,
       prospectProfile: 0,
     };
+    // Pilot-account hygiene summary. Derived from `status` and
+    // `password_rotated_at` — never exposes hashes or any password
+    // material.
+    //
+    //  - activeRotated      : active accounts whose password has been
+    //                         rotated away from the seed value.
+    //  - activeUnrotated    : active accounts that still carry their
+    //                         original seed/demo password. This is the
+    //                         only condition that produces a blocking
+    //                         warning.
+    //  - disabledUnrotated  : disabled accounts that still have the
+    //                         seed hash on file. Surfaced as a
+    //                         lower-severity note (informational).
+    //  - disabled           : total disabled accounts (any reason).
+    let pilotAccounts = {
+      activeRotated: 0,
+      activeUnrotated: 0,
+      disabledUnrotated: 0,
+      disabled: 0,
+    };
     try {
       const [admin] = await db
         .select({ n: sql<number>`count(*)::int` })
@@ -54,6 +74,28 @@ router.get(
       const [profile] = await db
         .select({ n: sql<number>`count(*)::int` })
         .from(prospectProfilesTable);
+      const [activeRotated] = await db
+        .select({ n: sql<number>`count(*)::int` })
+        .from(usersTable)
+        .where(
+          sql`${usersTable.status} = 'active' AND ${usersTable.passwordRotatedAt} IS NOT NULL`,
+        );
+      const [activeUnrotated] = await db
+        .select({ n: sql<number>`count(*)::int` })
+        .from(usersTable)
+        .where(
+          sql`${usersTable.status} = 'active' AND ${usersTable.passwordRotatedAt} IS NULL`,
+        );
+      const [disabledUnrotated] = await db
+        .select({ n: sql<number>`count(*)::int` })
+        .from(usersTable)
+        .where(
+          sql`${usersTable.status} = 'disabled' AND ${usersTable.passwordRotatedAt} IS NULL`,
+        );
+      const [disabled] = await db
+        .select({ n: sql<number>`count(*)::int` })
+        .from(usersTable)
+        .where(sql`${usersTable.status} = 'disabled'`);
       counts = {
         admin: admin?.n ?? 0,
         loanOfficer: officer?.n ?? 0,
@@ -62,10 +104,27 @@ router.get(
         partner: partner?.n ?? 0,
         prospectProfile: profile?.n ?? 0,
       };
+      pilotAccounts = {
+        activeRotated: activeRotated?.n ?? 0,
+        activeUnrotated: activeUnrotated?.n ?? 0,
+        disabledUnrotated: disabledUnrotated?.n ?? 0,
+        disabled: disabled?.n ?? 0,
+      };
       dbReachable = true;
     } catch {
       dbReachable = false;
     }
+
+    const demoWarning =
+      pilotAccounts.activeUnrotated > 0
+        ? `Demo-wachtwoorden zijn nog actief op ${pilotAccounts.activeUnrotated} actieve account(s). Roteer deze wachtwoorden vóór externe pilot-toegang.`
+        : null;
+    const demoNotice =
+      pilotAccounts.activeUnrotated === 0 &&
+      pilotAccounts.disabledUnrotated > 0
+        ? `${pilotAccounts.disabledUnrotated} gedeactiveerde demo-account(s) hebben nog hun originele seed-wachtwoord. Niet blokkerend — ze kunnen niet inloggen.`
+        : null;
+
     res.json({
       app: {
         status: "ok",
@@ -74,6 +133,7 @@ router.get(
         commit: process.env.REPL_DEPLOYMENT_ID ?? process.env.GIT_COMMIT ?? null,
       },
       database: { reachable: dbReachable, counts },
+      pilotAccounts,
       env: {
         required: env.required,
         optional: env.optional,
@@ -94,10 +154,8 @@ router.get(
         },
       },
       autoSeed: env.autoSeed,
-      demoWarning:
-        counts.admin > 0 || counts.loanOfficer > 0
-          ? "Demo-wachtwoorden zijn nog actief. Roteer admin- en loan-officer wachtwoorden vóór externe pilot-toegang."
-          : null,
+      demoWarning,
+      demoNotice,
     });
   },
 );
